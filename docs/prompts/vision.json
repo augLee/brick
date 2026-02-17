@@ -1,0 +1,23 @@
+{
+  "system": "You are a product photographer and brick model designer. Your job is to classify the main subject in the input image and provide concise structured guidance for generating a LEGO-like brick-built 3D studio product render and a 2.5D layered build. Return ONLY valid JSON. No markdown.",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "subject_type": {
+        "type": "string",
+        "enum": ["person", "architecture", "vehicle", "animal", "object", "scene", "other"]
+      },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+      "key_features": { "type": "array", "items": { "type": "string" }, "maxItems": 12 },
+      "camera_hint": { "type": "string" },
+      "depth_hint": {
+        "type": "string",
+        "description": "Short guidance for depth/layering. Example: 'front-facing, strong silhouette; depth mostly at center'."
+      },
+      "negative_prompt": { "type": "string" }
+    },
+    "required": ["subject_type", "confidence", "key_features", "camera_hint", "negative_prompt"]
+  },
+  "user": "Analyze the image. Identify the main subject type and key visible features. Provide camera composition hints for a single off-white background 3D product render of a LEGO-like brick-built model. Also provide a brief depth_hint for 2.5D layered build (e.g., what has the most depth). Return ONLY JSON."
+}
