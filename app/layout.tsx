@@ -19,9 +19,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ko">
+    <html lang="ko" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var saved=localStorage.getItem("theme_mode");var dark=saved?saved==="dark":window.matchMedia("(prefers-color-scheme: dark)").matches;if(dark){document.documentElement.classList.add("theme-dark");}}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className={inter.className}>
-        {/* 모든 페이지에 공통적으로 적용될 구조가 있다면 여기에 추가 (예: 푸터) */}
         {children}
       </body>
     </html>

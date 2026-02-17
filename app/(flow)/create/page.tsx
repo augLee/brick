@@ -12,6 +12,10 @@ type RenderResult = {
   storyText: string;
 };
 
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const ALLOWED_IMAGE_EXT = [".jpg", ".jpeg", ".png", ".webp"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
 export default function CreatePage() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -30,7 +34,33 @@ export default function CreatePage() {
     };
   }, [previewUrl]);
 
+  const validateImageFile = (nextFile: File) => {
+    if (nextFile.size > MAX_FILE_SIZE) {
+      return "파일 크기는 10MB 이하만 가능합니다.";
+    }
+
+    if (nextFile.type) {
+      if (!ALLOWED_IMAGE_TYPES.includes(nextFile.type)) {
+        return "이미지 파일(JPG, PNG, WebP)만 업로드할 수 있습니다.";
+      }
+      return null;
+    }
+
+    const lowerName = nextFile.name.toLowerCase();
+    const hasAllowedExt = ALLOWED_IMAGE_EXT.some((ext) => lowerName.endsWith(ext));
+    if (!hasAllowedExt) {
+      return "이미지 파일(JPG, PNG, WebP)만 업로드할 수 있습니다.";
+    }
+    return null;
+  };
+
   const selectFile = (nextFile: File) => {
+    const validationError = validateImageFile(nextFile);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     if (previewUrl?.startsWith("blob:")) {
       URL.revokeObjectURL(previewUrl);
     }

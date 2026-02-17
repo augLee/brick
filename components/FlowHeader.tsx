@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export function FlowHeader() {
   const router = useRouter();
@@ -21,6 +22,7 @@ export function FlowHeader() {
         <Logo />
       </Link>
       <div className="flex items-center gap-2">
+        <ThemeToggle />
         <button
           type="button"
           onClick={goBack}

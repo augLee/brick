@@ -1,4 +1,3 @@
-// api/generate-render/route.ts
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import visionPrompt from "@/docs/prompts/vision.json";
@@ -6,6 +5,10 @@ import { getOpenAIClient } from "@/lib/openai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const GEMINI_VISION_MODEL = "gemini-2.0-flash";
+const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+const IMAGEN_MODEL = process.env.IMAGEN_MODEL || "imagen-3.0-generate-002";
 
 type VisionAnalysis = {
   subject_type: "person" | "architecture" | "vehicle" | "animal" | "object" | "scene" | "other";
@@ -16,11 +19,7 @@ type VisionAnalysis = {
   negative_prompt: string;
 };
 
-type GeminiPart = { text?: string; inlineData?: { data?: string } };
-type GeminiResponse = {
-  candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
-};
-type ImagePayload = { mimeType: string; data: string };
+type VisionProvider = "openai" | "gemini";
 
 type OpenAIErrorLike = {
   status?: number;
@@ -30,20 +29,22 @@ type OpenAIErrorLike = {
   };
 };
 
-type VisionProvider = "openai" | "gemini";
-
-const baseRenderPrompt = () =>
-  "Transform the reference image into a LEGO-like brickified artwork. Keep the original composition, subject identity, and large color regions recognizable.";
-
-const subjectAddon = (type: string) => {
-  const addons: Record<string, string> = {
-    person: "For people, keep face/hair/clothing silhouette recognizable but simplify details into blocky bricks.",
-    architecture: "For buildings, keep major facade lines and skyline, simplified into stepped brick geometry.",
-    vehicle: "For cars/vehicles, keep wheelbase and iconic body silhouette, simplified with chunky brick blocks.",
-    animal: "For animals, preserve silhouette and key markings while using blocky brick forms.",
-  };
-  return addons[type] || "Convert the subject into a detailed brick-built model.";
+type GeminiPart = {
+  text?: string;
+  inlineData?: { mimeType?: string; data?: string };
+  inline_data?: { mime_type?: string; data?: string };
 };
+
+type GeminiGenerateContentResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: GeminiPart[];
+    };
+  }>;
+  error?: unknown;
+};
+
+type ImagePayload = { data: string; mimeType: string };
 
 const fallbackAnalysis: VisionAnalysis = {
   subject_type: "object",
@@ -66,23 +67,39 @@ function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
   };
 }
 
-async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePayload> {
-  const cleanUrl = inputImageUrl.trim();
-  const imageRes = await fetch(cleanUrl, {
-    method: "GET",
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Node.js) BrickifyAI/1.0",
-    },
-  });
+function buildFallbackPreview(text = "PREVIEW") {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <rect width="1024" height="1024" fill="#FAF9F6"/>
+    <rect x="256" y="256" width="512" height="512" rx="40" fill="#f4f4f5" stroke="#e4e4e7" stroke-width="10"/>
+    <text x="512" y="512" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="48" fill="#71717A">${text}</text>
+    <text x="512" y="580" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#A1A1AA">(Gemini Generation Failed)</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
 
-  if (!imageRes.ok) {
-    const errorText = await imageRes.text();
-    throw new Error(`입력 이미지를 불러오지 못했습니다. status=${imageRes.status} / message=${errorText}`);
+async function fetchImageAsBase64(url: string): Promise<ImagePayload> {
+  const res = await fetch(url.trim());
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to fetch image: status=${res.status}, body=${body}`);
   }
+  const arrayBuffer = await res.arrayBuffer();
+  const base64 = Buffer.from(arrayBuffer).toString("base64");
+  const mimeType = res.headers.get("content-type")?.split(";")[0] || "image/png";
+  return { data: base64, mimeType };
+}
 
-  const mimeType = imageRes.headers.get("content-type")?.split(";")[0] || "image/png";
-  const data = Buffer.from(await imageRes.arrayBuffer()).toString("base64");
-  return { mimeType, data };
+function getImageBase64FromGeminiResponse(payload: GeminiGenerateContentResponse): string | null {
+  const parts = payload.candidates?.[0]?.content?.parts;
+  if (!parts) return null;
+
+  for (const part of parts) {
+    const fromInlineData = part.inlineData?.data;
+    if (fromInlineData) return fromInlineData;
+    const fromInlineDataSnake = part.inline_data?.data;
+    if (fromInlineDataSnake) return fromInlineDataSnake;
+  }
+  return null;
 }
 
 async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis> {
@@ -110,10 +127,10 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
   return coerceAnalysis(parsed);
 }
 
-async function analyzeWithGemini(imagePayload: ImagePayload, geminiApiKey: string): Promise<VisionAnalysis> {
+async function analyzeWithGemini(image: ImagePayload, apiKey: string): Promise<VisionAnalysis> {
   const promptText = `${visionPrompt.system}\n\n${visionPrompt.user}`;
-  const geminiVisionRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -123,64 +140,124 @@ async function analyzeWithGemini(imagePayload: ImagePayload, geminiApiKey: strin
             role: "user",
             parts: [
               { text: promptText },
-              { inlineData: { mimeType: imagePayload.mimeType, data: imagePayload.data } },
+              { inlineData: { data: image.data, mimeType: image.mimeType } },
             ],
           },
         ],
-        generationConfig: {
-          responseMimeType: "application/json",
-        },
+        generationConfig: { responseMimeType: "application/json" },
       }),
     },
   );
 
-  const geminiVisionData = (await geminiVisionRes.json()) as GeminiResponse;
-  const text = geminiVisionData.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text ?? "{}";
-  return coerceAnalysis(JSON.parse(text));
+  const payload = (await res.json()) as GeminiGenerateContentResponse;
+  if (!res.ok) {
+    throw {
+      status: res.status,
+      response: { status: res.status, data: payload },
+    } satisfies OpenAIErrorLike;
+  }
+
+  const text = payload.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text ?? "{}";
+  const parsed = JSON.parse(text) as Partial<VisionAnalysis>;
+  return coerceAnalysis(parsed);
 }
 
-function buildFallbackPreview(subjectType: string) {
-  const label = `${subjectType.toUpperCase()} BRICK PREVIEW`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-    <rect width="1024" height="1024" fill="#FAF9F6"/>
-    <rect x="240" y="530" width="190" height="170" rx="24" fill="#27272A"/>
-    <rect x="448" y="530" width="190" height="170" rx="24" fill="#3F3F46"/>
-    <rect x="656" y="530" width="130" height="170" rx="24" fill="#52525B"/>
-    <rect x="372" y="340" width="290" height="160" rx="24" fill="#C2410C"/>
-    <circle cx="435" cy="340" r="26" fill="#C2410C"/>
-    <circle cx="522" cy="340" r="26" fill="#C2410C"/>
-    <circle cx="610" cy="340" r="26" fill="#C2410C"/>
-    <text x="512" y="790" text-anchor="middle" font-size="44" font-family="sans-serif" fill="#71717A">${label}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+async function generateWithGeminiImageModel(image: ImagePayload, prompt: string, apiKey: string): Promise<string | null> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              { inlineData: { data: image.data, mimeType: image.mimeType } },
+            ],
+          },
+        ],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+      }),
+    },
+  );
+
+  const payload = (await res.json()) as GeminiGenerateContentResponse;
+  if (!res.ok) {
+    console.error("Gemini image generation error:", payload);
+    return null;
+  }
+
+  return getImageBase64FromGeminiResponse(payload);
+}
+
+async function generateWithImagen(prompt: string, apiKey: string): Promise<string | null> {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: IMAGEN_MODEL,
+      prompt,
+      n: 1,
+      size: "1024x1024",
+      response_format: "b64_json",
+    }),
+  });
+
+  const payload = (await res.json()) as { data?: Array<{ b64_json?: string }>; error?: unknown };
+  if (!res.ok) {
+    console.error("Imagen API error:", payload);
+    return null;
+  }
+  return payload.data?.[0]?.b64_json ?? null;
+}
+
+function buildRenderPrompt(analysis: VisionAnalysis) {
+  const keyFeatures = analysis.key_features.join(", ");
+  return [
+    "Create a brickified image that clearly resembles the uploaded reference photo.",
+    "The result should look like LEGO/Minecraft-style block art with visible studs and plastic bricks.",
+    "Keep major composition, silhouette, and color regions similar to the source image.",
+    "Simplify details but preserve recognizability for person/vehicle/building/background.",
+    "Off-white studio-like background (#FAF9F6), clean product render feel.",
+    "No text, no logo, no watermark, no extra hands.",
+    `Subject type: ${analysis.subject_type}.`,
+    `Key features to preserve: ${keyFeatures || "main silhouette and dominant colors"}.`,
+    `Camera hint: ${analysis.camera_hint || "three-quarter"}.`,
+    `Negative prompt: ${analysis.negative_prompt || "blurry, low quality, text, logo, watermark"}.`,
+  ].join(" ");
+}
+
+function runMockMode(message?: string) {
+  return NextResponse.json({
+    jobId: randomUUID(),
+    previewImageUrl: buildFallbackPreview("MOCK PREVIEW"),
+    partsSummary: "Mock Data: 850 bricks",
+    storyText: message || "현재 데모 모드로 실행 중입니다. (API 키 확인 필요)",
+  });
 }
 
 export async function POST(req: Request) {
   try {
-    const { inputImageUrl } = await req.json();
-    if (!inputImageUrl || typeof inputImageUrl !== "string") {
-      return NextResponse.json({ error: "URL이 없습니다." }, { status: 400 });
-    }
-
+    const { inputImageUrl } = (await req.json()) as { inputImageUrl?: string };
     const geminiApiKey = process.env.GEMINI_API_KEY;
-    const visionProvider = normalizeVisionProvider(process.env.VISION_PROVIDER);
-    let imagePayload: ImagePayload | null = null;
-    let analysis: VisionAnalysis = fallbackAnalysis;
 
-    if (geminiApiKey) {
-      try {
-        imagePayload = await fetchInputImagePayload(inputImageUrl);
-      } catch (err: unknown) {
-        const detail = err instanceof Error ? err.message : err;
-        return NextResponse.json(
-          {
-            message: "입력 이미지를 읽을 수 없어 브릭 렌더를 생성할 수 없습니다.",
-            detail,
-          },
-          { status: 400 },
-        );
-      }
+    if (!inputImageUrl || typeof inputImageUrl !== "string") {
+      return NextResponse.json({ error: "No URL" }, { status: 400 });
     }
+
+    if (!geminiApiKey) {
+      console.warn("GEMINI_API_KEY is missing. Using Mock Mode.");
+      return runMockMode();
+    }
+
+    const imagePayload = await fetchImageAsBase64(inputImageUrl);
+    const visionProvider = normalizeVisionProvider(process.env.VISION_PROVIDER);
+    let analysis = fallbackAnalysis;
 
     if (visionProvider === "openai") {
       try {
@@ -189,121 +266,70 @@ export async function POST(req: Request) {
         const openAIError = err as OpenAIErrorLike;
         const status = openAIError.status ?? openAIError.response?.status;
         const data = openAIError.response?.data ?? err;
-        const detail =
-          typeof data === "object" && data !== null && "error" in data
-            ? (data as { error?: unknown }).error ?? data
-            : data;
-
         console.error("OpenAI error:", data);
 
         if (status === 429) {
           return NextResponse.json(
             {
               message: "OpenAI 호출 한도를 초과했어요. (결제/예산 또는 요청 빈도 확인 필요)",
-              detail,
+              detail: data,
             },
             { status: 429 },
           );
         }
 
-        return NextResponse.json(
-          {
-            message: "OpenAI vision 분석 실패",
-            detail,
-          },
-          { status: 500 },
-        );
+        return NextResponse.json({ message: "OpenAI vision 분석 실패", detail: data }, { status: 500 });
       }
     } else {
-      if (!geminiApiKey) {
-        return NextResponse.json(
-          { message: "GEMINI_API_KEY가 없어 Gemini vision 분석을 실행할 수 없습니다." },
-          { status: 500 },
-        );
-      }
-
       try {
-        if (!imagePayload) {
-          return NextResponse.json({ message: "Gemini vision 분석을 위한 입력 이미지가 없습니다." }, { status: 500 });
-        }
         analysis = await analyzeWithGemini(imagePayload, geminiApiKey);
       } catch (err: unknown) {
         const geminiError = err as OpenAIErrorLike;
         const status = geminiError.status ?? geminiError.response?.status ?? 500;
         const data = geminiError.response?.data ?? err;
         console.error("Gemini vision error:", data);
-        return NextResponse.json(
-          {
-            message: "Gemini vision 분석 실패",
-            detail: data,
-          },
-          { status },
-        );
+        return NextResponse.json({ message: "Gemini vision 분석 실패", detail: data }, { status });
       }
     }
 
-    const finalPrompt = [
-      baseRenderPrompt(),
-      subjectAddon(analysis.subject_type),
-      `Key features to preserve: ${analysis.key_features.join(", ") || "main silhouette and major colors"}.`,
-      "Style target: simplified blocky LEGO/Minecraft-like geometry with visible studs and brick seams.",
-      "Include foreground subject and background shapes as brick blocks, not flat cartoon.",
-      "Result should feel clearly similar to the uploaded image while reduced to clean brick forms.",
-      "No text, no logos, no watermark.",
-      `Camera: ${analysis.camera_hint || "three-quarter"}.`,
-      `Negative prompt: ${analysis.negative_prompt || "text, logo, watermark, blur"}.`,
-    ].join(" ");
+    const renderPrompt = buildRenderPrompt(analysis);
 
-    let previewImageUrl = buildFallbackPreview(analysis.subject_type);
+    let previewImageUrl: string | null = null;
+    let generationPath: "gemini-image" | "imagen" | "fallback" = "fallback";
 
-    if (geminiApiKey) {
-      if (!imagePayload) {
-        return NextResponse.json({ message: "이미지 생성용 입력 이미지가 없습니다." }, { status: 500 });
+    const geminiImageB64 = await generateWithGeminiImageModel(imagePayload, renderPrompt, geminiApiKey);
+    if (geminiImageB64) {
+      previewImageUrl = `data:image/png;base64,${geminiImageB64}`;
+      generationPath = "gemini-image";
+    }
+
+    if (!previewImageUrl) {
+      const imagenB64 = await generateWithImagen(renderPrompt, geminiApiKey);
+      if (imagenB64) {
+        previewImageUrl = `data:image/png;base64,${imagenB64}`;
+        generationPath = "imagen";
       }
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${geminiApiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: finalPrompt },
-                  { inlineData: { mimeType: imagePayload.mimeType, data: imagePayload.data } },
-                ],
-              },
-            ],
-            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-          }),
-        },
-      );
+    }
 
-      if (geminiRes.ok) {
-        const geminiData = (await geminiRes.json()) as GeminiResponse;
-        const b64Image = geminiData.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData?.data;
-        if (b64Image) {
-          previewImageUrl = `data:image/png;base64,${b64Image}`;
-        }
-      }
+    if (!previewImageUrl) {
+      previewImageUrl = buildFallbackPreview("IMAGE GEN FAILED");
+      generationPath = "fallback";
     }
 
     return NextResponse.json({
       jobId: randomUUID(),
       previewImageUrl,
-      partsSummary: "MVP 추정: 약 900~1,300개 브릭",
-      storyText: `${analysis.subject_type}을(를) 바탕으로 브릭 작품 설계를 시작했습니다.`,
+      partsSummary: "Estimated: ~1,200 bricks (AI analysis)",
+      storyText: `AI가 "${analysis.subject_type}" 특성을 분석해 브릭 스타일 결과물을 생성했습니다.`,
       debug: {
-        analysis,
         visionProvider,
-        hasOpenAI: Boolean(getOpenAIClient()),
-        hasGemini: Boolean(geminiApiKey),
+        generationPath,
+        imageModel: GEMINI_IMAGE_MODEL,
+        imagenModel: IMAGEN_MODEL,
       },
     });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "렌더 생성 중 오류가 발생했습니다.";
-    console.error("generate-render error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Server Error:", error);
+    return runMockMode("서버 오류로 인해 데모 모드로 실행됩니다.");
   }
 }

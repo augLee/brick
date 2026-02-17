@@ -5,6 +5,17 @@
 :root {
   --foreground-rgb: 24, 24, 27; /* zinc-900 */
   --background-rgb: 255, 254, 250; /* Cream (#FFFEFA) */
+  --surface-rgb: 255, 255, 255;
+  --surface-soft-rgb: 244, 244, 245;
+  --border-rgb: 228, 228, 231;
+}
+
+html.theme-dark {
+  --foreground-rgb: 229, 231, 235; /* gray-200 */
+  --background-rgb: 15, 18, 24;
+  --surface-rgb: 24, 28, 36;
+  --surface-soft-rgb: 39, 45, 56;
+  --border-rgb: 63, 63, 70;
 }
 
 body {
@@ -36,4 +47,34 @@ body {
 /* 버튼이나 카드에 들어갈 부드러운 트랜지션 공통 설정 */
 * {
   @apply transition-colors duration-200;
+}
+
+html.theme-dark .bg-\[\#FFFEFA\] {
+  background-color: rgb(var(--background-rgb)) !important;
+}
+
+html.theme-dark .bg-white {
+  background-color: rgb(var(--surface-rgb)) !important;
+}
+
+html.theme-dark .bg-zinc-50,
+html.theme-dark .bg-zinc-100 {
+  background-color: rgb(var(--surface-soft-rgb)) !important;
+}
+
+html.theme-dark .border-zinc-100,
+html.theme-dark .border-zinc-200,
+html.theme-dark .border-zinc-300 {
+  border-color: rgb(var(--border-rgb)) !important;
+}
+
+html.theme-dark .text-zinc-900,
+html.theme-dark .text-zinc-800 {
+  color: rgb(var(--foreground-rgb)) !important;
+}
+
+html.theme-dark .text-zinc-600,
+html.theme-dark .text-zinc-500,
+html.theme-dark .text-zinc-400 {
+  color: rgb(161 161 170) !important;
 }

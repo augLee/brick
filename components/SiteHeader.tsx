@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export function SiteHeader() {
   return (
@@ -7,7 +8,10 @@ export function SiteHeader() {
       <Link href="/">
         <Logo />
       </Link>
-      <nav className="hidden items-center gap-6 text-sm font-bold text-zinc-600 md:flex">
+      <div className="md:hidden">
+        <ThemeToggle />
+      </div>
+      <nav className="hidden items-center gap-3 text-sm font-bold text-zinc-600 md:flex">
         <a href="#how-it-works" className="transition hover:text-zinc-900">
           작동 방식
         </a>
@@ -20,6 +24,7 @@ export function SiteHeader() {
         >
           시작하기
         </Link>
+        <ThemeToggle />
       </nav>
     </header>
   );
