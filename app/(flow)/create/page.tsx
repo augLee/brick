@@ -1,70 +1,87 @@
-// app/(flow)/create/page.tsx
 "use client";
 
-import React, { useState, useRef } from 'react';
-import Image from 'next/image';
-import Link from 'next/link';
-import { Upload, Sparkles, Loader2, ArrowRight, RefreshCcw, CheckCircle2, Info } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import React, { useEffect, useRef, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
+
+type RenderResult = {
+  jobId: string;
+  previewImageUrl: string;
+  partsSummary: string;
+  storyText: string;
+};
 
 export default function CreatePage() {
-  // 상태 관리
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [result, setResult] = useState<{
-    previewImageUrl: string;
-    partsSummary: string;
-    storyText: string;
-  } | null>(null);
-
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<RenderResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 파일 선택 핸들러
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setPreviewUrl(URL.createObjectURL(selectedFile));
-      setResult(null); // 새로운 사진 올리면 이전 결과 초기화
+  useEffect(() => {
+    return () => {
+      if (previewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  const selectFile = (nextFile: File) => {
+    if (previewUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(previewUrl);
     }
+    setFile(nextFile);
+    setPreviewUrl(URL.createObjectURL(nextFile));
+    setError(null);
+    setResult(null);
   };
 
-  // 생성 프로세스 실행
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+    selectFile(selectedFile);
+  };
+
   const generateBrickArt = async () => {
     if (!file) return;
-
     try {
+      setError(null);
       setIsUploading(true);
-      
-      // 1. 이미지 업로드 API 호출
+
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append("file", file);
 
-      const uploadRes = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-      const uploadData = await uploadRes.json();
-      if (!uploadRes.ok) throw new Error(uploadData.error);
+      const uploadRes = await fetch("/api/upload", { method: "POST", body: formData });
+      const uploadData = (await uploadRes.json()) as { url?: string; error?: string };
+      if (!uploadRes.ok || !uploadData.url) {
+        throw new Error(uploadData.error || "업로드에 실패했습니다.");
+      }
 
-      // 2. 브릭 변환 API 호출
       setIsUploading(false);
       setIsGenerating(true);
 
-      const generateRes = await fetch('/api/generate-render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const renderRes = await fetch("/api/generate-render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inputImageUrl: uploadData.url }),
       });
-      const generateData = await generateRes.json();
-      if (!generateRes.ok) throw new Error(generateData.error);
+      const renderData = (await renderRes.json()) as Partial<RenderResult> & { error?: string; message?: string };
+      if (!renderRes.ok || !renderData.previewImageUrl || !renderData.jobId) {
+        throw new Error(renderData.message || renderData.error || "렌더 생성에 실패했습니다.");
+      }
 
-      // 3. 결과 설정
-      setResult(generateData);
-    } catch (error: any) {
-      alert(`오류가 발생했습니다: ${error.message}`);
+      setResult({
+        jobId: renderData.jobId,
+        previewImageUrl: renderData.previewImageUrl,
+        partsSummary: renderData.partsSummary || "부품 수량 분석 결과가 준비되었습니다.",
+        storyText: renderData.storyText || "브릭 디자인이 생성되었습니다.",
+      });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.");
     } finally {
       setIsUploading(false);
       setIsGenerating(false);
@@ -72,116 +89,115 @@ export default function CreatePage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FFFEFA] text-zinc-900">
-      {/* Header */}
-      <header className="flex items-center justify-between px-8 py-6">
-        <Link href="/"><Logo /></Link>
-        <div className="hidden md:block text-sm font-medium text-zinc-400">
-          Step 2: Create your masterpiece
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-5xl px-6 py-12">
+    <div className="text-zinc-900">
+      <main className="mx-auto max-w-6xl px-6 pb-16 pt-6">
         <div className="grid gap-12 md:grid-cols-2">
-          
-          {/* Left: Upload Section */}
           <div className="space-y-6">
-            <div className="space-y-2">
-              <h1 className="text-3xl font-black tracking-tight">사진 업로드</h1>
-              <p className="text-zinc-500 font-medium">변환하고 싶은 사물이나 인물 사진을 올려주세요.</p>
-            </div>
-
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className={`relative aspect-square cursor-pointer overflow-hidden rounded-[2.5rem] border-2 border-dashed transition-all
-                ${previewUrl ? 'border-[#C2410C] bg-white' : 'border-zinc-200 bg-zinc-50 hover:bg-zinc-100'}`}
-            >
-              {previewUrl ? (
-                <Image src={previewUrl} alt="Preview" fill className="object-cover" />
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center space-y-4">
-                  <div className="rounded-2xl bg-white p-4 shadow-sm">
-                    <Upload className="text-[#C2410C]" size={28} />
-                  </div>
-                  <p className="text-sm font-bold text-zinc-400">클릭하여 사진 선택</p>
-                </div>
-              )}
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileChange} 
-                className="hidden" 
-                accept="image/*" 
-              />
+            <div>
+              <h1 className="text-3xl font-black tracking-tight md:text-4xl">사진 업로드</h1>
+              <p className="mt-2 text-sm font-medium text-zinc-500">인물, 사물, 건축물 어떤 사진이든 업로드해보세요.</p>
             </div>
 
             <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragActive(false);
+                const dropped = e.dataTransfer.files?.[0];
+                if (dropped) selectFile(dropped);
+              }}
+              className={`relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-[2.4rem] border-2 border-dashed transition
+                ${dragActive ? "border-[#C2410C] bg-orange-50" : "border-zinc-200 bg-zinc-50"}
+                ${previewUrl ? "border-[#C2410C] bg-white" : ""}`}
+            >
+              {previewUrl ? (
+                <>
+                  <Image src={previewUrl} alt="업로드 미리보기" fill className="object-contain p-3" />
+                  <div className="pointer-events-none absolute right-4 top-4 rounded-full bg-black/60 px-3 py-1 text-xs font-bold text-white">
+                    클릭해서 다른 사진으로 교체
+                  </div>
+                  <div className="pointer-events-none absolute bottom-4 left-0 w-full px-4 text-center text-xs font-semibold text-zinc-500 whitespace-nowrap">
+                    현재 이미지를 누르면 그 위에 다른 사진을 다시 올릴 수 있어요.
+                  </div>
+                </>
+                
+              ) : (
+                <div className="space-y-4 text-center">
+                  <div className="mx-auto inline-flex rounded-2xl bg-white p-4 shadow-sm">
+                    <ImageUp size={28} className="text-[#C2410C]" />
+                  </div>
+                  <p className="text-sm font-bold text-zinc-500">클릭 또는 드래그앤드롭</p>
+                  <p className="text-xs font-medium text-zinc-400">JPG, PNG, WEBP / 최대 10MB</p>
+                </div>
+              )}
+              <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+            </button>            
+
+            {error && <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">{error}</p>}
+
+            <button
+              type="button"
               onClick={generateBrickArt}
               disabled={!file || isUploading || isGenerating}
-              className="w-full group flex items-center justify-center gap-3 rounded-3xl bg-[#C2410C] py-5 text-lg font-bold text-white transition-all 
-              hover:bg-[#B8430A] disabled:bg-zinc-200 disabled:cursor-not-allowed shadow-lg hover:shadow-orange-200"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#C2410C] px-4 py-4 text-base font-bold text-white transition hover:bg-[#B8430A] disabled:cursor-not-allowed disabled:bg-zinc-300"
             >
-              {isUploading ? <><Loader2 className="animate-spin" /> 업로드 중...</> :
-               isGenerating ? <><Loader2 className="animate-spin" /> AI 설계 중...</> :
-               <><Sparkles size={20} /> 브릭으로 변환하기</>}
+              {isUploading ? <Loader2 size={18} className="animate-spin" /> : isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+              {isUploading ? "업로드 중..." : isGenerating ? "AI 분석/생성 중..." : "브릭 작품 생성하기"}
             </button>
           </div>
 
-          {/* Right: Result Section */}
           <div className="space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-3xl font-black tracking-tight">AI 결과물</h2>
-              <p className="text-zinc-500 font-medium">AI가 생성한 3D 브릭 미리보기입니다.</p>
+            <div>
+              <h2 className="text-3xl font-black tracking-tight md:text-4xl">AI 결과물</h2>
+              <p className="mt-2 text-sm font-medium text-zinc-500">생성된 오프화이트 배경의 제품형 렌더를 확인하세요.</p>
             </div>
 
-            <div className="relative aspect-square overflow-hidden rounded-[2.5rem] bg-zinc-100 border border-zinc-200 shadow-inner">
+            <div className="relative aspect-square overflow-hidden rounded-[2.4rem] border border-zinc-200 bg-zinc-100">
               {result ? (
-                <Image src={result.previewImageUrl} alt="Result" fill className="object-cover animate-in fade-in duration-1000" />
+                <Image src={result.previewImageUrl} alt="브릭 렌더 결과" fill className="object-cover" />
               ) : (
-                <div className="flex h-full flex-col items-center justify-center p-12 text-center space-y-4">
-                  <div className="rounded-2xl bg-zinc-200/50 p-4">
-                    <BoxIcon className="text-zinc-300" size={32} />
-                  </div>
-                  <p className="text-sm font-medium text-zinc-400">왼쪽에서 사진을 변환하면<br />여기에 결과가 나타납니다.</p>
+                <div className="flex h-full items-center justify-center p-10 text-center text-sm font-semibold text-zinc-400">
+                  아직 생성된 결과가 없습니다.
                 </div>
               )}
             </div>
 
             {result && (
-              <div className="space-y-4 animate-in slide-in-from-bottom-4 duration-500">
-                <div className="rounded-[1.5rem] bg-orange-50 p-6 border border-orange-100">
-                  <div className="flex items-center gap-2 mb-2 text-[#C2410C]">
-                    <CheckCircle2 size={18} />
-                    <span className="font-bold">분석 완료</span>
-                  </div>
-                  <p className="text-sm text-[#B8430A] font-medium leading-relaxed whitespace-pre-wrap">
-                    {result.storyText}
-                  </p>
+              <div className="space-y-4 rounded-[1.5rem] border border-orange-100 bg-orange-50 p-6">
+                <div className="flex items-center gap-2 text-[#C2410C]">
+                  <CheckCircle2 size={18} />
+                  <p className="text-sm font-black">생성 완료</p>
                 </div>
-                
-                <div className="flex items-center justify-between p-2">
-                    <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold">
-                        <Info size={14} />
-                        {result.partsSummary}
-                    </div>
-                    <Link href="/checkout" className="flex items-center gap-2 text-[#C2410C] font-extrabold text-sm hover:underline">
-                        전체 패키지 구매하기 <ArrowRight size={16} />
-                    </Link>
+                <p className="text-sm font-semibold leading-relaxed text-[#B8430A]">{result.storyText}</p>
+                <div className="flex items-center gap-2 text-xs font-bold text-zinc-500">
+                  <Info size={14} />
+                  {result.partsSummary}
                 </div>
+                <Link
+                  href={`/checkout?jobId=${encodeURIComponent(result.jobId)}`}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#C2410C] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#B8430A]"
+                >
+                  다음 단계로 이동
+                  <ArrowRight size={16} />
+                </Link>
+              </div>
+            )}
+
+            {!result && !isUploading && !isGenerating && (
+              <div className="inline-flex items-center gap-2 rounded-xl bg-zinc-100 px-4 py-3 text-xs font-semibold text-zinc-500">
+                <Sparkles size={14} />
+                업로드 후 생성 버튼을 누르면 결과가 여기에 표시됩니다.
               </div>
             )}
           </div>
         </div>
       </main>
     </div>
-  );
-}
-
-function BoxIcon({ size, className }: { size: number, className: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
-      <path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" />
-    </svg>
   );
 }

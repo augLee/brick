@@ -2,20 +2,12 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Box, Layers, Zap, Image as ImageIcon, ListChecks, BookOpen, Sparkles } from 'lucide-react';
-import { Logo } from '@/components/Logo';
 
 export default function LandingPage() {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#FFFEFA]">
+    <main className="relative overflow-hidden bg-[#FFFEFA]">
       {/* 배경 상단 은은한 오렌지 글로우 효과 */}
       <div className="pointer-events-none absolute inset-0 [background:radial-gradient(60%_45%_at_50%_10%,rgba(194,65,12,0.12)_0%,rgba(250,249,246,0)_60%)]" />
-
-      {/* Navigation */}
-      <nav className="relative z-10 flex items-center px-8 py-8 md:px-12">
-        <Link href="/">
-          <Logo />
-        </Link>
-      </nav>
 
       {/* Hero Section */}
       <section className="relative z-10 mx-auto max-w-5xl px-6 py-24 text-center">
@@ -48,7 +40,7 @@ export default function LandingPage() {
       </section>
 
       {/* How it works Section */}
-      <section className="relative z-10 mx-auto max-w-6xl px-8 pb-16">
+      <section id="how-it-works" className="relative z-10 mx-auto max-w-6xl px-8 pb-16">
         <div className="mx-auto mb-12 max-w-2xl text-center">
           <h2 className="text-2xl font-black tracking-tight text-zinc-900 md:text-4xl">
             작동 방식은 간단해요
@@ -81,7 +73,7 @@ export default function LandingPage() {
       </section>
 
       {/* Package Preview Section */}
-      <section className="relative z-10 mx-auto max-w-6xl px-8 pb-32">
+      <section id="package" className="relative z-10 mx-auto max-w-6xl px-8 pb-32">
         <div className="mx-auto mb-12 max-w-2xl text-center">
           <h2 className="text-2xl font-black tracking-tight text-zinc-900 md:text-4xl">
             결제 즉시 받는 디지털 패키지
