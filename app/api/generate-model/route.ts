@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 
 export const runtime = "edge";
@@ -135,7 +134,7 @@ export async function POST(req: Request) {
     const steps = buildSteps(bricks, layers);
 
     return NextResponse.json({
-      jobId: randomUUID(),
+      jobId: crypto.randomUUID(),
       model: {
         units: "stud",
         grid: { width: 16, height: 16, layers: 6 },

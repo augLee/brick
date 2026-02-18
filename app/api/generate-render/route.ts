@@ -1,5 +1,4 @@
 // api/generate-render/route.ts
-import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import visionPrompt from "@/docs/prompts/vision.json";
 import { getOpenAIClient } from "@/lib/openai";
@@ -290,7 +289,7 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({
-      jobId: randomUUID(),
+      jobId: crypto.randomUUID(),
       previewImageUrl,
       partsSummary: "MVP 추정: 약 900~1,300개 브릭",
       storyText: `${analysis.subject_type}을(를) 바탕으로 브릭 작품 설계를 시작했습니다.`,

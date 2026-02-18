@@ -1,5 +1,4 @@
 // api/upload/route.ts
-import { randomUUID } from 'crypto';
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient, publicBucket } from "@/lib/supabase";
 
@@ -71,7 +70,7 @@ export async function POST(request: Request) {
 
     // 3. 파일명 생성 (검증된 MIME 기준 확장자 사용)
     const ext = EXT_BY_MIME[detectedMime] || "png";
-    const fileName = `inputs/${randomUUID()}.${ext}`;
+    const fileName = `inputs/${crypto.randomUUID()}.${ext}`;
 
     // 4. Supabase Admin 권한으로 업로드 (RLS 무시)
     const { error } = await supabaseAdmin.storage
