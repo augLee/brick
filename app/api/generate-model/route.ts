@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isServerLayerVisibleEnabled } from "@/lib/admin-mode";
 
 export const runtime = "edge";
 
@@ -131,7 +132,7 @@ export async function POST(req: Request) {
 
     const { bricks, layers } = buildModel();
     const bom = buildBom(bricks);
-    const steps = buildSteps(bricks, layers);
+    const steps = isServerLayerVisibleEnabled ? buildSteps(bricks, layers) : [];
 
     return NextResponse.json({
       jobId: crypto.randomUUID(),
@@ -140,7 +141,7 @@ export async function POST(req: Request) {
         grid: { width: 16, height: 16, layers: 6 },
         palette,
         bricks,
-        layers,
+        layers: isServerLayerVisibleEnabled ? layers : [],
       },
       bom,
       steps,

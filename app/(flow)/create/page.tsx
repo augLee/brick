@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
 import { clearAdminLogs, pushAdminLog } from "@/lib/admin-logs";
-import { isAdminModeEnabled } from "@/lib/admin-mode";
+import { isAdminModeEnabled, isLayerVisibleEnabled } from "@/lib/admin-mode";
 
 type RenderResult = {
   jobId: string;
@@ -157,6 +157,10 @@ export default function CreatePage() {
               환경설정: 관리자 모드{" "}
               <span className={isAdminModeEnabled ? "text-emerald-600" : "text-zinc-500"}>
                 {isAdminModeEnabled ? "ON" : "OFF"}
+              </span>
+              {" / "}Layer{" "}
+              <span className={isLayerVisibleEnabled ? "text-emerald-600" : "text-zinc-500"}>
+                {isLayerVisibleEnabled ? "ON" : "OFF"}
               </span>
             </div>
 

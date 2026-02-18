@@ -18,6 +18,9 @@ export function SiteHeader() {
         <a href="#package" className="transition hover:text-zinc-900">
           패키지
         </a>
+        <Link href="/about" className="transition hover:text-zinc-900">
+          소개
+        </Link>
         <Link
           href="/create"
           className="rounded-full bg-[#C2410C] px-4 py-2 text-white transition hover:bg-[#B8430A]"
