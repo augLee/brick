@@ -1,13 +1,19 @@
-// api/generate-render/route.ts
 import { NextResponse } from "next/server";
-import visionPrompt from "@/docs/prompts/vision.json";
-import { getOpenAIClient } from "@/lib/openai";
+import visionPromptJson from "@/docs/prompts/vision.json";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
+// --- 타입 정의 ---
 type VisionAnalysis = {
-  subject_type: "person" | "architecture" | "vehicle" | "animal" | "object" | "scene" | "other";
+  subject_type:
+    | "person"
+    | "architecture"
+    | "vehicle"
+    | "animal"
+    | "object"
+    | "scene"
+    | "other";
   confidence: number;
   key_features: string[];
   camera_hint: string;
@@ -15,31 +21,47 @@ type VisionAnalysis = {
   negative_prompt: string;
 };
 
-type GeminiPart = { text?: string; inlineData?: { data?: string } };
+type GeminiPart = {
+  text?: string;
+  inlineData?: { data?: string; mimeType?: string };
+};
+
 type GeminiResponse = {
   candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
 };
-type ImagePayload = { mimeType: string; data: string };
 
-type OpenAIErrorLike = {
-  status?: number;
-  response?: {
-    status?: number;
-    data?: unknown;
-  };
-};
+type ImagePayload = { mimeType: string; data: string };
 
 type VisionProvider = "openai" | "gemini";
 
+type VisionPrompt = { system: string; user: string };
+
+// OpenAI 응답 최소 타입(필요한 부분만)
+type OpenAIChatCompletionsResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+  }>;
+};
+
+// --- 프롬프트 로딩 (any 금지: unknown -> 타입 캐스팅) ---
+const visionPrompt = visionPromptJson as unknown as VisionPrompt;
+
+// --- 프롬프트 헬퍼 ---
 const baseRenderPrompt = () =>
   "Transform the reference image into a LEGO-like brickified artwork. Keep the original composition, subject identity, and large color regions recognizable.";
 
 const subjectAddon = (type: string) => {
   const addons: Record<string, string> = {
-    person: "For people, keep face/hair/clothing silhouette recognizable but simplify details into blocky bricks.",
-    architecture: "For buildings, keep major facade lines and skyline, simplified into stepped brick geometry.",
-    vehicle: "For cars/vehicles, keep wheelbase and iconic body silhouette, simplified with chunky brick blocks.",
-    animal: "For animals, preserve silhouette and key markings while using blocky brick forms.",
+    person:
+      "For people, keep face/hair/clothing silhouette recognizable but simplify details into blocky bricks.",
+    architecture:
+      "For buildings, keep major facade lines and skyline, simplified into stepped brick geometry.",
+    vehicle:
+      "For cars/vehicles, keep wheelbase and iconic body silhouette, simplified with chunky brick blocks.",
+    animal:
+      "For animals, preserve silhouette and key markings while using blocky brick forms.",
   };
   return addons[type] || "Convert the subject into a detailed brick-built model.";
 };
@@ -53,6 +75,7 @@ const fallbackAnalysis: VisionAnalysis = {
   negative_prompt: "blurry, text, watermark, logo",
 };
 
+// --- 유틸 ---
 function normalizeVisionProvider(value?: string): VisionProvider {
   return value?.toLowerCase() === "gemini" ? "gemini" : "openai";
 }
@@ -61,13 +84,15 @@ function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
   return {
     ...fallbackAnalysis,
     ...raw,
-    key_features: Array.isArray(raw.key_features) ? raw.key_features : fallbackAnalysis.key_features,
+    key_features: Array.isArray(raw.key_features)
+      ? raw.key_features
+      : fallbackAnalysis.key_features,
   };
 }
 
 /**
  * ✅ Cloudflare Edge에서 안전한 base64 인코딩
- * - nodejs_compat 켜져 있으면 Buffer 사용이 가장 안정적/빠름
+ * - Pages에서 nodejs_compat 켜져 있으면 Buffer 사용이 가장 안정적
  */
 async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePayload> {
   const cleanUrl = inputImageUrl.trim();
@@ -84,13 +109,13 @@ async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePaylo
   }
 
   const mimeType = imageRes.headers.get("content-type")?.split(";")[0] || "image/png";
-
   const arrayBuffer = await imageRes.arrayBuffer();
-  // ✅ Buffer 사용 (nodejs_compat 필요)
-  const base64Data = Buffer.from(arrayBuffer).toString("base64");
 
+  // nodejs_compat 필요
+  const base64Data = Buffer.from(arrayBuffer).toString("base64");
   return { mimeType, data: base64Data };
 }
+
 /**
  * ✅ OpenAI: SDK 대신 fetch 직접 호출 (Edge/Worker에서 안정적)
  */
@@ -108,11 +133,11 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: (visionPrompt as any).system },
+        { role: "system", content: visionPrompt.system },
         {
           role: "user",
           content: [
-            { type: "text", text: (visionPrompt as any).user },
+            { type: "text", text: visionPrompt.user },
             { type: "image_url", image_url: { url: inputImageUrl } },
           ],
         },
@@ -125,13 +150,16 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
     throw new Error(`OpenAI 분석 실패: ${res.status} ${t}`);
   }
 
-  const data = (await res.json()) as any;
-  const content = data?.choices?.[0]?.message?.content ?? "{}";
+  const data = (await res.json()) as OpenAIChatCompletionsResponse;
+  const content = data.choices?.[0]?.message?.content ?? "{}";
+
   let parsed: Partial<VisionAnalysis> = {};
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    parsed = {};
+  if (typeof content === "string") {
+    try {
+      parsed = JSON.parse(content) as Partial<VisionAnalysis>;
+    } catch {
+      parsed = {};
+    }
   }
   return coerceAnalysis(parsed);
 }
@@ -140,7 +168,7 @@ async function analyzeWithGemini(
   imagePayload: ImagePayload,
   geminiApiKey: string
 ): Promise<VisionAnalysis> {
-  const promptText = `${(visionPrompt as any).system}\n\n${(visionPrompt as any).user}`;
+  const promptText = `${visionPrompt.system}\n\n${visionPrompt.user}`;
 
   const geminiVisionRes = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
@@ -173,7 +201,7 @@ async function analyzeWithGemini(
 
   let parsed: Partial<VisionAnalysis> = {};
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text) as Partial<VisionAnalysis>;
   } catch {
     parsed = {};
   }
@@ -186,13 +214,19 @@ function buildFallbackPreview(subjectType: string) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+// 요청 바디 최소 타입
+type GenerateRenderRequestBody = {
+  inputImageUrl?: unknown;
+};
+
 // --- 메인 API 핸들러 ---
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const inputImageUrl = body?.inputImageUrl;
+    const bodyUnknown = (await req.json().catch(() => ({}))) as unknown;
+    const body = bodyUnknown as GenerateRenderRequestBody;
 
-    if (!inputImageUrl || typeof inputImageUrl !== "string") {
+    const inputImageUrl = body.inputImageUrl;
+    if (typeof inputImageUrl !== "string" || !inputImageUrl.trim()) {
       return NextResponse.json({ error: "URL이 없습니다." }, { status: 400 });
     }
 
@@ -202,7 +236,7 @@ export async function POST(req: Request) {
     let imagePayload: ImagePayload | null = null;
     let analysis: VisionAnalysis = fallbackAnalysis;
 
-    // ✅ Gemini를 사용할 수 있는 경우에만 이미지 payload 생성 (비용/실패 줄임)
+    // Gemini 쓸 수 있으면 미리 이미지 payload 준비
     if (geminiApiKey) {
       try {
         imagePayload = await fetchInputImagePayload(inputImageUrl);
@@ -214,7 +248,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 분석 실행 (OpenAI / Gemini)
+    // 분석 실행
     if (visionProvider === "openai") {
       try {
         analysis = await analyzeWithOpenAI(inputImageUrl);
@@ -247,7 +281,7 @@ export async function POST(req: Request) {
 
     let previewImageUrl = buildFallbackPreview(analysis.subject_type);
 
-    // ✅ Gemini 이미지 생성 (가능한 경우)
+    // Gemini 이미지 생성(가능할 때만)
     if (geminiApiKey && imagePayload) {
       const geminiRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${geminiApiKey}`,
@@ -282,7 +316,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // ✅ Edge 환경: 전역 crypto 사용
+    // Edge 환경: 전역 crypto 사용
     const jobId = crypto.randomUUID();
 
     return NextResponse.json({
