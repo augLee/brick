@@ -4,12 +4,20 @@ import React, { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
+import { clearAdminLogs, pushAdminLog } from "@/lib/admin-logs";
+import { isAdminModeEnabled } from "@/lib/admin-mode";
 
 type RenderResult = {
   jobId: string;
   previewImageUrl: string;
   partsSummary: string;
   storyText: string;
+  debug?: {
+    visionProvider?: string;
+    generationPath?: string;
+    imageModel?: string;
+    imagenModel?: string;
+  };
 };
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -79,6 +87,11 @@ export default function CreatePage() {
   const generateBrickArt = async () => {
     if (!file) return;
     try {
+      if (isAdminModeEnabled) {
+        clearAdminLogs();
+        pushAdminLog("create", "새 생성 플로우 시작", { fileName: file.name });
+      }
+
       setError(null);
       setIsUploading(true);
 
@@ -89,6 +102,9 @@ export default function CreatePage() {
       const uploadData = (await uploadRes.json()) as { url?: string; error?: string };
       if (!uploadRes.ok || !uploadData.url) {
         throw new Error(uploadData.error || "업로드에 실패했습니다.");
+      }
+      if (isAdminModeEnabled) {
+        pushAdminLog("upload", "이미지 업로드 성공", { url: uploadData.url });
       }
 
       setIsUploading(false);
@@ -103,14 +119,24 @@ export default function CreatePage() {
       if (!renderRes.ok || !renderData.previewImageUrl || !renderData.jobId) {
         throw new Error(renderData.message || renderData.error || "렌더 생성에 실패했습니다.");
       }
+      if (isAdminModeEnabled) {
+        pushAdminLog("generate-render", "렌더 생성 성공", {
+          jobId: renderData.jobId,
+          debug: renderData.debug,
+        });
+      }
 
       setResult({
         jobId: renderData.jobId,
         previewImageUrl: renderData.previewImageUrl,
         partsSummary: renderData.partsSummary || "부품 수량 분석 결과가 준비되었습니다.",
         storyText: renderData.storyText || "브릭 디자인이 생성되었습니다.",
+        debug: renderData.debug,
       });
     } catch (err: unknown) {
+      if (isAdminModeEnabled) {
+        pushAdminLog("create", "생성 플로우 실패", { error: err instanceof Error ? err.message : String(err) });
+      }
       setError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.");
     } finally {
       setIsUploading(false);
@@ -126,6 +152,12 @@ export default function CreatePage() {
             <div>
               <h1 className="text-3xl font-black tracking-tight md:text-4xl">사진 업로드</h1>
               <p className="mt-2 text-sm font-medium text-zinc-500">인물, 사물, 건축물 어떤 사진이든 업로드해보세요.</p>
+            </div>
+            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs font-semibold text-zinc-600">
+              환경설정: 관리자 모드{" "}
+              <span className={isAdminModeEnabled ? "text-emerald-600" : "text-zinc-500"}>
+                {isAdminModeEnabled ? "ON" : "OFF"}
+              </span>
             </div>
 
             <button

@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CreditCard, Loader2, ShieldCheck } from "lucide-react";
+import { pushAdminLog } from "@/lib/admin-logs";
+import { isAdminModeEnabled } from "@/lib/admin-mode";
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -12,13 +14,25 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setJobId(params.get("jobId"));
+    const resolvedJobId = params.get("jobId");
+    setJobId(resolvedJobId);
+
+    if (isAdminModeEnabled) {
+      pushAdminLog("checkout", "체크아웃 페이지 진입", { jobId: resolvedJobId });
+    }
   }, []);
 
   const canProceed = useMemo(() => Boolean(jobId), [jobId]);
 
   const handleCheckout = async () => {
     if (!jobId) return;
+
+    if (isAdminModeEnabled) {
+      pushAdminLog("checkout", "관리자 모드 결제 우회", { jobId });
+      router.push(`/success?jobId=${encodeURIComponent(jobId)}`);
+      return;
+    }
+
     try {
       setPending(true);
       setError(null);
@@ -33,8 +47,14 @@ export default function CheckoutPage() {
         throw new Error(data.error || "결제 세션 생성에 실패했습니다.");
       }
 
+      if (isAdminModeEnabled) {
+        pushAdminLog("checkout", "결제 세션 생성 완료", { jobId, checkoutUrl: data.checkoutUrl });
+      }
       router.push(data.checkoutUrl);
     } catch (err: unknown) {
+      if (isAdminModeEnabled) {
+        pushAdminLog("checkout", "결제 진행 실패", { error: err instanceof Error ? err.message : String(err) });
+      }
       setError(err instanceof Error ? err.message : "결제 처리 중 오류가 발생했습니다.");
       setPending(false);
     }
@@ -47,6 +67,9 @@ export default function CheckoutPage() {
           <h1 className="text-3xl font-black tracking-tight">패키지 결제</h1>
           <p className="mt-3 text-sm font-medium leading-relaxed text-zinc-500">
             결제 완료 후 바로 조립 가이드, 부품 리스트, 미리보기 이미지를 다운로드할 수 있습니다.
+          </p>
+          <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-600">
+            환경설정: 관리자 모드 <span className={isAdminModeEnabled ? "text-emerald-600" : "text-zinc-500"}>{isAdminModeEnabled ? "ON" : "OFF"}</span>
           </p>
 
           <div className="mt-8 rounded-2xl bg-zinc-50 p-5">
@@ -70,7 +93,7 @@ export default function CheckoutPage() {
             className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#C2410C] px-4 py-4 text-base font-bold text-white transition hover:bg-[#B8430A] disabled:cursor-not-allowed disabled:bg-zinc-300"
           >
             {pending ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-            {pending ? "결제 페이지 이동 중..." : "결제하고 다운로드 받기"}
+            {pending ? "결제 페이지 이동 중..." : isAdminModeEnabled ? "관리자 모드로 바로 다운로드 이동" : "결제하고 다운로드 받기"}
           </button>
         </div>
 
@@ -85,7 +108,7 @@ export default function CheckoutPage() {
 
           <div className="mt-8 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
             <ShieldCheck size={16} />
-            안전 결제(Stripe 연동 예정), 성공 후 즉시 다운로드
+            {isAdminModeEnabled ? "관리자 모드: 결제를 건너뛰고 즉시 다운로드로 이동" : "안전 결제(Stripe 연동 예정), 성공 후 즉시 다운로드"}
           </div>
         </div>
       </section>

@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
+import { isServerAdminModeEnabled } from "@/lib/admin-mode";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
 
 type CheckoutBody = {
   jobId?: string;
@@ -12,6 +13,16 @@ export async function POST(req: Request) {
     const body = (await req.json()) as CheckoutBody;
     const jobId = body.jobId?.trim() || randomUUID();
     const origin = new URL(req.url).origin;
+
+    if (isServerAdminModeEnabled) {
+      return NextResponse.json({
+        sessionId: `admin_bypass_${randomUUID()}`,
+        checkoutUrl: `${origin}/success?jobId=${encodeURIComponent(jobId)}`,
+        amount: 0,
+        currency: "KRW",
+        bypassed: true,
+      });
+    }
 
     return NextResponse.json({
       sessionId: `sess_${randomUUID()}`,

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
 
 type Part = "brick_1x1" | "brick_1x2" | "brick_2x2" | "brick_2x4";
 type PaletteColor = { id: string; hex: string; name: string };

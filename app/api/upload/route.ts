@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClient, publicBucket } from "@/lib/supabase";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
