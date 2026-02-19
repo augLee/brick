@@ -68,9 +68,11 @@ export default function CheckoutPage() {
           <p className="mt-3 text-sm font-medium leading-relaxed text-zinc-500">
             결제 완료 후 바로 조립 가이드, 부품 리스트, 미리보기 이미지를 다운로드할 수 있습니다.
           </p>
-          <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-600">
-            환경설정: 관리자 모드 <span className={isAdminModeEnabled ? "text-emerald-600" : "text-zinc-500"}>{isAdminModeEnabled ? "ON" : "OFF"}</span>
-          </p>
+          {isAdminModeEnabled && (
+            <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-600">
+              환경설정: 관리자 모드 <span className="text-emerald-600">ON</span>
+            </p>
+          )}
 
           <div className="mt-8 rounded-2xl bg-zinc-50 p-5">
             <p className="text-sm font-bold text-zinc-700">Brickify Digital Package</p>

@@ -153,16 +153,12 @@ export default function CreatePage() {
               <h1 className="text-3xl font-black tracking-tight md:text-4xl">사진 업로드</h1>
               <p className="mt-2 text-sm font-medium text-zinc-500">인물, 사물, 건축물 어떤 사진이든 업로드해보세요.</p>
             </div>
-            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs font-semibold text-zinc-600">
-              환경설정: 관리자 모드{" "}
-              <span className={isAdminModeEnabled ? "text-emerald-600" : "text-zinc-500"}>
-                {isAdminModeEnabled ? "ON" : "OFF"}
-              </span>
-              {" / "}Layer{" "}
-              <span className={isLayerVisibleEnabled ? "text-emerald-600" : "text-zinc-500"}>
-                {isLayerVisibleEnabled ? "ON" : "OFF"}
-              </span>
-            </div>
+            {isAdminModeEnabled && (
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs font-semibold text-zinc-600">
+                환경설정: 관리자 모드 <span className="text-emerald-600">ON</span>
+                {" / "}Layer <span className={isLayerVisibleEnabled ? "text-emerald-600" : "text-zinc-500"}>{isLayerVisibleEnabled ? "ON" : "OFF"}</span>
+              </div>
+            )}
 
             <button
               type="button"
