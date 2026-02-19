@@ -19,10 +19,10 @@ export async function GET(req: Request) {
       files: [
         { name: "brickify-preview.svg", url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` },
         { name: "parts-list.csv", url: `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}` },
-        { name: "build-guide.pdf", status: "준비중", capacity: "capacity 확보 중" },
+        { name: "build-guide.pdf", status: "준비중"},
         { name: "story-card.txt", url: `data:text/plain;charset=utf-8,${encodeURIComponent(txt)}` },
       ],
-      note: "층별 조립 가이드는 현재 준비중입니다. capacity 확보 후 제공됩니다.",
+      note: "조립 가이드는 현재 준비중입니다.",
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "다운로드 패키지 생성 중 오류가 발생했습니다.";

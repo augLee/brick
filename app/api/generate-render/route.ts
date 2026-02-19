@@ -32,8 +32,6 @@ type GeminiResponse = {
 
 type ImagePayload = { mimeType: string; data: string };
 
-type VisionProvider = "openai" | "gemini";
-
 type VisionPrompt = { system: string; user: string };
 
 // OpenAI 응답 최소 타입(필요한 부분만)
@@ -45,12 +43,26 @@ type OpenAIChatCompletionsResponse = {
   }>;
 };
 
-// --- 프롬프트 로딩 (any 금지: unknown -> 타입 캐스팅) ---
+type OpenAIImagesResponse = {
+  data?: Array<{
+    b64_json?: string;
+    url?: string;
+  }>;
+  error?: { message?: string };
+};
+
+// --- 프롬프트 로딩 ---
 const visionPrompt = visionPromptJson as unknown as VisionPrompt;
 
 // --- 프롬프트 헬퍼 ---
-const baseRenderPrompt = () =>
-  "Transform the reference image into a LEGO-like brickified artwork. Keep the original composition, subject identity, and large color regions recognizable.";
+const baseRenderPrompt = () => `
+Rebuild the input photo as a fully 3D LEGO model (like an official LEGO set), NOT a flat mosaic and NOT a relief.
+Preserve the exact subject identity, silhouette, proportions, and key parts.
+The model must have real 3D volume: visible side faces, layered bricks, and separated components.
+Place the model on a small base (ground plate) like a mini diorama, but the subject itself must be freestanding 3D.
+Studio product photography on clean off-white background (#FAF9F6), centered, sharp, realistic LEGO plastic.
+`.trim();
+
 
 const subjectAddon = (type: string) => {
   const addons: Record<string, string> = {
@@ -59,7 +71,7 @@ const subjectAddon = (type: string) => {
     architecture:
       "For buildings, keep major facade lines and skyline, simplified into stepped brick geometry.",
     vehicle:
-      "For cars/vehicles, keep wheelbase and iconic body silhouette, simplified with chunky brick blocks.",
+      "Build a fully 3D LEGO car model. Preserve wheelbase and body silhouette. Wheels must be perfectly circular with distinct tires and rims, centered on axles. Body must have 3D thickness and fenders/hood/cabin as separate volumes (not merged into a flat board).",
     animal:
       "For animals, preserve silhouette and key markings while using blocky brick forms.",
   };
@@ -76,10 +88,6 @@ const fallbackAnalysis: VisionAnalysis = {
 };
 
 // --- 유틸 ---
-function normalizeVisionProvider(value?: string): VisionProvider {
-  return value?.toLowerCase() === "gemini" ? "gemini" : "openai";
-}
-
 function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
   return {
     ...fallbackAnalysis,
@@ -91,9 +99,18 @@ function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
 }
 
 /**
- * ✅ Cloudflare Edge에서 안전한 base64 인코딩
- * - Pages에서 nodejs_compat 켜져 있으면 Buffer 사용이 가장 안정적
+ * ✅ Edge-safe base64 인코딩 (Buffer 없이)
  */
+function arrayBufferToBase64(ab: ArrayBuffer): string {
+  const bytes = new Uint8Array(ab);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePayload> {
   const cleanUrl = inputImageUrl.trim();
   const imageRes = await fetch(cleanUrl, {
@@ -111,26 +128,79 @@ async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePaylo
   const mimeType = imageRes.headers.get("content-type")?.split(";")[0] || "image/png";
   const arrayBuffer = await imageRes.arrayBuffer();
 
-  // nodejs_compat 필요
-  const base64Data = Buffer.from(arrayBuffer).toString("base64");
+  const base64Data = arrayBufferToBase64(arrayBuffer);
   return { mimeType, data: base64Data };
 }
 
-/**
- * ✅ OpenAI: SDK 대신 fetch 직접 호출 (Edge/Worker에서 안정적)
- */
-async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis> {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function generateImageWithOpenAI(prompt: string): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
+  const project = process.env.OPENAI_PROJECT_ID?.trim();
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  // 프로젝트 헤더는 proj_... 일 때만
+  if (project && project.startsWith("proj_")) headers["OpenAI-Project"] = project;
+
+  const res = await fetch(`${baseUrl}/v1/images/generations`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model,
+      prompt,
+      size: "1024x1024",
+    }),
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`OpenAI 이미지 생성 실패: ${res.status} ${t}`);
+  }
+
+  const data = (await res.json()) as OpenAIImagesResponse;
+  const b64 = data.data?.[0]?.b64_json;
+  if (!b64) throw new Error("OpenAI 이미지 생성 결과가 비었습니다.");
+  return `data:image/png;base64,${b64}`;
+}
+
+/**
+ * ✅ OpenAI: 분석 (JSON 응답)
+ */
+async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
+
+  const model = process.env.OPENAI_VISION_MODEL?.trim() || "gpt-4o-mini";
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
+  const project = process.env.OPENAI_PROJECT_ID?.trim();
+
+  // 민감정보(키 전체) 로그 금지: 앞부분만
+  console.log("[OPENAI] key head:", apiKey.slice(0, 8));
+  console.log("[OPENAI] project:", project);
+  console.log("[OPENAI] vision model:", model);
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  // 프로젝트 헤더는 "proj_..." ID만 허용 (이름 넣으면 401)
+  if (project && project.startsWith("proj_")) {
+    headers["OpenAI-Project"] = project;
+  } else if (project) {
+    console.warn("[OPENAI] OPENAI_PROJECT_ID must start with proj_. got:", project);
+  }
+
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: visionPrompt.system },
@@ -147,7 +217,9 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
 
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`OpenAI 분석 실패: ${res.status} ${t}`);
+    throw new Error(
+      `OpenAI 분석 실패: ${res.status} ${t} (model=${model}, project=${project ?? "none"})`
+    );
   }
 
   const data = (await res.json()) as OpenAIChatCompletionsResponse;
@@ -160,50 +232,6 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
     } catch {
       parsed = {};
     }
-  }
-  return coerceAnalysis(parsed);
-}
-
-async function analyzeWithGemini(
-  imagePayload: ImagePayload,
-  geminiApiKey: string
-): Promise<VisionAnalysis> {
-  const promptText = `${visionPrompt.system}\n\n${visionPrompt.user}`;
-
-  const geminiVisionRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: promptText },
-              { inlineData: { mimeType: imagePayload.mimeType, data: imagePayload.data } },
-            ],
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }
-  );
-
-  if (!geminiVisionRes.ok) {
-    const t = await geminiVisionRes.text().catch(() => "");
-    throw new Error(`Gemini 분석 실패: ${geminiVisionRes.status} ${t}`);
-  }
-
-  const geminiVisionData = (await geminiVisionRes.json()) as GeminiResponse;
-  const text =
-    geminiVisionData.candidates?.[0]?.content?.parts?.find((part) => part.text)?.text ?? "{}";
-
-  let parsed: Partial<VisionAnalysis> = {};
-  try {
-    parsed = JSON.parse(text) as Partial<VisionAnalysis>;
-  } catch {
-    parsed = {};
   }
   return coerceAnalysis(parsed);
 }
@@ -230,93 +258,122 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "URL이 없습니다." }, { status: 400 });
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    const visionProvider = normalizeVisionProvider(process.env.VISION_PROVIDER);
-
-    let imagePayload: ImagePayload | null = null;
+    // ✅ 분석은 OpenAI만 사용
     let analysis: VisionAnalysis = fallbackAnalysis;
-
-    // Gemini 쓸 수 있으면 미리 이미지 payload 준비
-    if (geminiApiKey) {
-      try {
-        imagePayload = await fetchInputImagePayload(inputImageUrl);
-      } catch (err: unknown) {
-        return NextResponse.json(
-          { message: "이미지 로드 실패", detail: String(err) },
-          { status: 400 }
-        );
-      }
+    try {
+      analysis = await analyzeWithOpenAI(inputImageUrl);
+    } catch (err: unknown) {
+      console.error("OpenAI Error:", err);
+      analysis = fallbackAnalysis;
     }
 
-    // 분석 실행
-    if (visionProvider === "openai") {
-      try {
-        analysis = await analyzeWithOpenAI(inputImageUrl);
-      } catch (err: unknown) {
-        console.error("OpenAI Error:", err);
-        return NextResponse.json({ message: "OpenAI 분석 실패" }, { status: 500 });
-      }
-    } else {
-      if (!geminiApiKey) {
-        return NextResponse.json({ message: "Gemini 키 없음" }, { status: 500 });
-      }
-      try {
-        if (!imagePayload) throw new Error("이미지 없음");
-        analysis = await analyzeWithGemini(imagePayload, geminiApiKey);
-      } catch (err: unknown) {
-        console.error("Gemini Vision Error:", err);
-        return NextResponse.json({ message: "Gemini 분석 실패" }, { status: 500 });
-      }
-    }
-
-    // 프롬프트 구성
+    // ✅ 최종 프롬프트 구성
     const finalPrompt = [
       baseRenderPrompt(),
       subjectAddon(analysis.subject_type),
+       // 3D 강제
+      "3D rules: full 3D object, freestanding, not attached to a vertical baseboard. No pixel mosaic. No wall art.",
+      "Show depth clearly: visible side surfaces, undercarriage shadow, gaps between parts.",
+      "Camera: 3/4 front view, slightly above, like a LEGO catalog product shot.",
+      "Lighting: softbox studio, crisp highlights on plastic, soft shadow on ground.",
       `Key features: ${analysis.key_features.join(", ")}.`,
       "Style: simplified blocky LEGO geometry.",
       `Camera: ${analysis.camera_hint}.`,
       `Negative prompt: ${analysis.negative_prompt}.`,
     ].join(" ");
 
+    // ✅ moderation_blocked 완화: 이미지 생성에만 Safe Prefix
+    const SAFE_PREFIX = `
+      Create a clean studio product photo of a fully 3D LEGO model (like an official LEGO set).
+      White/off-white background (#FAF9F6), centered, sharp, realistic LEGO plastic.
+      Must be a freestanding full 3D object with visible side faces and depth.
+      NOT a flat mosaic, NOT a relief, NOT wall-mounted art, NOT a baseplate portrait.
+      No text, no logos, no watermark.
+      No nudity, no violence, no weapons, no hate symbols, no political content.
+      If the input depicts a person, render as a generic toy-like LEGO minifigure/bust (not a real person).
+      `.trim();
+
+
+    const imagePrompt = `${SAFE_PREFIX}\n\n${finalPrompt}`;
+
     let previewImageUrl = buildFallbackPreview(analysis.subject_type);
 
-    // Gemini 이미지 생성(가능할 때만)
-    if (geminiApiKey && imagePayload) {
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${geminiApiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: finalPrompt },
-                  { inlineData: { mimeType: imagePayload.mimeType, data: imagePayload.data } },
-                ],
-              },
-            ],
-            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-          }),
+    // ✅ Gemini는 이미지 생성만 (키 있을 때만)
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+    const enableGemini = process.env.ENABLE_GEMINI === "true";
+
+    const geminiImageModel =
+      process.env.GEMINI_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image";
+
+    // 1) Gemini로 이미지 생성 시도
+    let geminiSucceeded = false;
+
+    if (enableGemini && geminiApiKey) {
+      try {
+        const imagePayload = await fetchInputImagePayload(inputImageUrl);
+
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+            geminiImageModel
+          )}:generateContent?key=${geminiApiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts: [
+                    { text: imagePrompt }, // ✅ safe prompt 사용
+                    {
+                      inlineData: {
+                        mimeType: imagePayload.mimeType,
+                        data: imagePayload.data,
+                      },
+                    },
+                  ],
+                },
+              ],
+              generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+            }),
+          }
+        );
+
+        if (geminiRes.ok) {
+          const geminiData = (await geminiRes.json()) as GeminiResponse;
+          const b64Image =
+            geminiData.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)
+              ?.inlineData?.data;
+
+          if (b64Image) {
+            previewImageUrl = `data:image/png;base64,${b64Image}`;
+            geminiSucceeded = true;
+          }
+        } else {
+          const t = await geminiRes.text().catch(() => "");
+          console.warn(
+            "Gemini image generation failed:",
+            geminiRes.status,
+            t,
+            "model:",
+            geminiImageModel
+          );
         }
-      );
-
-      if (geminiRes.ok) {
-        const geminiData = (await geminiRes.json()) as GeminiResponse;
-        const b64Image =
-          geminiData.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData
-            ?.data;
-
-        if (b64Image) previewImageUrl = `data:image/png;base64,${b64Image}`;
-      } else {
-        const t = await geminiRes.text().catch(() => "");
-        console.warn("Gemini image generation failed:", geminiRes.status, t);
+      } catch (err: unknown) {
+        console.warn("Gemini image generation error:", err, "model:", geminiImageModel);
       }
     }
 
-    // Edge 환경: 전역 crypto 사용
+    // 2) Gemini 실패 시 OpenAI 이미지 생성 fallback
+    if (!geminiSucceeded) {
+      try {
+        previewImageUrl = await generateImageWithOpenAI(imagePrompt); // ✅ safe prompt 사용
+        previewImageUrl = await generateImageWithOpenAI2(inputImageUrl, imagePrompt); // ✅ safe prompt 사용
+      } catch (err: unknown) {
+        console.warn("OpenAI image fallback failed:", err);
+      }
+    }
+
     const jobId = crypto.randomUUID();
 
     return NextResponse.json({
@@ -324,10 +381,53 @@ export async function POST(req: Request) {
       previewImageUrl,
       partsSummary: "MVP 추정: 약 900~1,300개 브릭",
       storyText: `${analysis.subject_type} 변환 완료`,
+      // prompt: finalPrompt, // 필요 시 디버그
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "서버 에러";
     console.error("API Error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+async function generateImageWithOpenAI2(inputImageUrl: string, prompt: string): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
+
+  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
+  const project = process.env.OPENAI_PROJECT_ID?.trim();
+
+  // 1) 입력 이미지 fetch → Blob
+  const imgRes = await fetch(inputImageUrl);
+  if (!imgRes.ok) throw new Error(`입력 이미지 fetch 실패: ${imgRes.status}`);
+  const imgBlob = await imgRes.blob();
+
+  // 2) multipart/form-data 구성 (Edge OK)
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("size", "1024x1024");
+  form.append("image", imgBlob, "input.png");
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (project && project.startsWith("proj_")) headers["OpenAI-Project"] = project;
+
+  const res = await fetch(`${baseUrl}/v1/images/edits`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`OpenAI 이미지 편집 실패: ${res.status} ${t}`);
+  }
+
+  const data = (await res.json()) as OpenAIImagesResponse;
+  const b64 = data.data?.[0]?.b64_json;
+  if (!b64) throw new Error("OpenAI 이미지 결과(b64)가 비었습니다.");
+  return `data:image/png;base64,${b64}`;
 }
