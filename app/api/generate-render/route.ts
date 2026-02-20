@@ -19,6 +19,9 @@ type VisionAnalysis = {
   camera_hint: string;
   depth_hint?: string;
   negative_prompt: string;
+  // 추가
+  dominant_color?: string;   // "#RRGGBB"
+  palette8?: string[];       // ["#....", ...] length=8
 };
 
 type GeminiPart = {
@@ -56,11 +59,11 @@ const visionPrompt = visionPromptJson as unknown as VisionPrompt;
 
 // --- 프롬프트 헬퍼 ---
 const baseRenderPrompt = () => `
-Rebuild the input photo as a fully 3D LEGO model (like an official LEGO set), NOT a flat mosaic and NOT a relief.
-Preserve the exact subject identity, silhouette, proportions, and key parts.
-The model must have real 3D volume: visible side faces, layered bricks, and separated components.
-Place the model on a small base (ground plate) like a mini diorama, but the subject itself must be freestanding 3D.
+Rebuild the input photo as a fully 3D LEGO model (like an official LEGO set), NOT a flat mosaic.
+Preserve the subject silhouette, proportions, and key parts.
+Freestanding 3D object with real volume: visible side faces, layered bricks, separated components.
 Studio product photography on clean off-white background (#FAF9F6), centered, sharp, realistic LEGO plastic.
+No baseplate, no stand, no pedestal. Isolated object with a soft ground shadow only.
 `.trim();
 
 
@@ -84,17 +87,56 @@ const fallbackAnalysis: VisionAnalysis = {
   key_features: ["subject silhouette"],
   camera_hint: "three-quarter angle",
   depth_hint: "center has most depth",
-  negative_prompt: "blurry, text, watermark, logo",
+  negative_prompt: "blurry, text, watermark, logo, nudity, violence, weapons",
+
+  dominant_color: "#1E88E5",
+  palette8: ["#FFFFFF","#000000","#D9D9D9","#7A7A7A","#E53935","#1E88E5","#FDD835","#43A047"],
 };
 
 // --- 유틸 ---
+const HEX = /^#[0-9A-F]{6}$/;
+
+function normalizeHex(s: string) {
+  const up = s.trim().toUpperCase();
+  return HEX.test(up) ? up : null;
+}
+
+function ensurePalette8(raw: unknown): string[] {
+  const base = fallbackAnalysis.palette8!;
+  const mustSoft = ["#000000", "#7A7A7A"]; // 휠 안정용(화이트/라이트그레이는 굳이 강제 X)
+
+  const norm = Array.isArray(raw)
+    ? raw
+        .map((x) => (typeof x === "string" ? normalizeHex(x) : null))
+        .filter((x): x is string => !!x)
+    : [];
+
+  // 분석 팔레트 순서 유지 + 중복 제거
+  const out: string[] = [];
+  for (const c of norm) if (!out.includes(c)) out.push(c);
+
+  // 휠용 색 없으면만 뒤에 추가(순서 최대한 유지)
+  for (const c of mustSoft) if (!out.includes(c)) out.push(c);
+
+  // 8개 맞추기: 부족하면 fallback으로 채움
+  for (const c of base) {
+    if (out.length >= 8) break;
+    if (!out.includes(c)) out.push(c);
+  }
+
+  return out.slice(0, 8);
+}
+
 function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
   return {
     ...fallbackAnalysis,
     ...raw,
-    key_features: Array.isArray(raw.key_features)
-      ? raw.key_features
-      : fallbackAnalysis.key_features,
+    key_features: Array.isArray(raw.key_features) ? raw.key_features : fallbackAnalysis.key_features,
+    dominant_color:
+      typeof raw.dominant_color === "string" && normalizeHex(raw.dominant_color)
+        ? normalizeHex(raw.dominant_color)!
+        : fallbackAnalysis.dominant_color,
+    palette8: ensurePalette8(raw.palette8),
   };
 }
 
@@ -267,20 +309,51 @@ export async function POST(req: Request) {
       analysis = fallbackAnalysis;
     }
 
+    const palette = (analysis.palette8?.length === 8 ? analysis.palette8 : fallbackAnalysis.palette8)!;
+    //const paletteText = palette.join(", ");
+    const paletteLines = palette.map((c, i) => `${i + 1}) ${c}`).join("\n");
+
+    const colorConstraint = `
+    COLOR CONSTRAINT (STRICT):
+    Use EXACTLY these 8 flat colors only (no other colors):
+    ${paletteLines}
+    Any pixel outside the palette is forbidden.
+    Replace any non-palette colors with the nearest palette color.
+    No gradients, no shading, no dithering, no texture.
+    `.trim();
+    
+    const wheelRule = `
+    WHEELS:
+    Wheels are ALLOWED if appropriate.
+    Wheels/tires should use only #000000 or #7A7A7A (solid shapes, no gradients).
+    `.trim();
+
     // ✅ 최종 프롬프트 구성
+    // const finalPrompt = [
+    //   baseRenderPrompt(),
+    //   subjectAddon(analysis.subject_type),
+    //    // 3D 강제
+    //   "3D rules: full 3D object, freestanding, not attached to a vertical baseboard. No pixel mosaic. No wall art.",
+    //   "Show depth clearly: visible side surfaces, undercarriage shadow, gaps between parts.",
+    //   "Camera: 3/4 front view, slightly above, like a LEGO catalog product shot.",
+    //   "Lighting: softbox studio, crisp highlights on plastic, soft shadow on ground.",
+    //   `Key features: ${analysis.key_features.join(", ")}.`,
+    //   "Style: simplified blocky LEGO geometry.",
+    //   `Camera: ${analysis.camera_hint}.`,
+    //   `Negative prompt: ${analysis.negative_prompt}.`,
+    // ].join(" ");
     const finalPrompt = [
       baseRenderPrompt(),
       subjectAddon(analysis.subject_type),
-       // 3D 강제
-      "3D rules: full 3D object, freestanding, not attached to a vertical baseboard. No pixel mosaic. No wall art.",
-      "Show depth clearly: visible side surfaces, undercarriage shadow, gaps between parts.",
+      "3D rules: full 3D object, freestanding, not flat, not wall art.",
       "Camera: 3/4 front view, slightly above, like a LEGO catalog product shot.",
       "Lighting: softbox studio, crisp highlights on plastic, soft shadow on ground.",
       `Key features: ${analysis.key_features.join(", ")}.`,
-      "Style: simplified blocky LEGO geometry.",
-      `Camera: ${analysis.camera_hint}.`,
+      `Camera hint: ${analysis.camera_hint}.`,
+      colorConstraint,
+      wheelRule,
       `Negative prompt: ${analysis.negative_prompt}.`,
-    ].join(" ");
+    ].join("\n\n");
 
     // ✅ moderation_blocked 완화: 이미지 생성에만 Safe Prefix
     const SAFE_PREFIX = `
@@ -290,7 +363,7 @@ export async function POST(req: Request) {
       NOT a flat mosaic, NOT a relief, NOT wall-mounted art, NOT a baseplate portrait.
       No text, no logos, no watermark.
       No nudity, no violence, no weapons, no hate symbols, no political content.
-      If the input depicts a person, render as a generic toy-like LEGO minifigure/bust (not a real person).
+      If the input depicts a person, keep the silhouette, hairstyle, and outfit recognizable, but render as a LEGO-style toy figure (no real-person photo likeness).
       `.trim();
 
 
@@ -367,7 +440,7 @@ export async function POST(req: Request) {
     // 2) Gemini 실패 시 OpenAI 이미지 생성 fallback
     if (!geminiSucceeded) {
       try {
-        previewImageUrl = await generateImageWithOpenAI(imagePrompt); // ✅ safe prompt 사용
+        //previewImageUrl = await generateImageWithOpenAI(imagePrompt); // ✅ safe prompt 사용
         previewImageUrl = await generateImageWithOpenAI2(inputImageUrl, imagePrompt); // ✅ safe prompt 사용
       } catch (err: unknown) {
         console.warn("OpenAI image fallback failed:", err);
@@ -379,9 +452,9 @@ export async function POST(req: Request) {
     return NextResponse.json({
       jobId,
       previewImageUrl,
-      partsSummary: "MVP 추정: 약 900~1,300개 브릭",
+      palette8: palette,
+      dominant_color: analysis.dominant_color,
       storyText: `${analysis.subject_type} 변환 완료`,
-      // prompt: finalPrompt, // 필요 시 디버그
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "서버 에러";

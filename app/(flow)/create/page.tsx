@@ -1,18 +1,24 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
 import { clearAdminLogs, pushAdminLog } from "@/lib/admin-logs";
 import { isAdminModeEnabled, isLayerVisibleEnabled } from "@/lib/admin-mode";
 import { useLanguage, type SiteLanguage } from "@/components/LanguageProvider";
+import type { BomItem } from "@/lib/bom-client";
+import { computeBomFromPreview } from "@/lib/bom-client";
 
 type RenderResult = {
   jobId: string;
   previewImageUrl: string;
   partsSummary: string;
   storyText: string;
+
+  palette8?: string[];
+  dominant_color?: string;
+
   debug?: {
     visionProvider?: string;
     generationPath?: string;
@@ -92,6 +98,32 @@ const copy = {
   },
 } satisfies Record<SiteLanguage, Record<string, string>>;
 
+type SortMode = "MOST" | "COLOR" | "PART";
+const TOP_N = 40;
+
+function BrickMini({ part, color }: { part: string; color: string }) {
+  const m = part.match(/_(\d+)x(\d+)$/);
+  const w = m ? Number(m[1]) : 1;
+  const h = m ? Number(m[2]) : 1;
+  const W = Math.min(w, 6);
+  const H = Math.min(h, 6);
+
+  return (
+    <div
+      className="grid gap-[2px] rounded-xl border bg-zinc-50 p-2"
+      style={{
+        gridTemplateColumns: `repeat(${W}, 10px)`,
+        gridTemplateRows: `repeat(${H}, 10px)`,
+      }}
+      title={m ? `${w}×${h}` : part}
+    >
+      {Array.from({ length: W * H }).map((_, i) => (
+        <span key={i} className="h-[10px] w-[10px] rounded-full border" style={{ background: color }} />
+      ))}
+    </div>
+  );
+}
+
 export default function CreatePage() {
   const { language } = useLanguage();
   const t = copy[language];
@@ -104,6 +136,15 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RenderResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [bom, setBom] = useState<BomItem[] | null>(null);
+  const [bomError, setBomError] = useState<string | null>(null);
+  const [isBomLoading, setIsBomLoading] = useState(false);
+
+  const [bomMeta, setBomMeta] = useState<{ totalPieces: number; totalStuds: number; uniqueItems: number } | null>(null);
+    
+  const [sortMode, setSortMode] = useState<SortMode>("MOST");
+  const [query, setQuery] = useState("");
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -112,6 +153,136 @@ export default function CreatePage() {
       }
     };
   }, [previewUrl]);
+  const paletteOrder = useMemo(() => {
+    const list = (result?.palette8 ?? []).map((c) => String(c).toUpperCase());
+    const m = new Map<string, number>();
+    list.forEach((c, i) => m.set(c, i));
+    return m;
+  }, [result?.palette8]);
+  
+  const safeBom = useMemo(() => {
+    return (bom ?? [])
+      .filter(
+        (it) =>
+          it &&
+          typeof it.part === "string" &&
+          typeof it.color === "string" &&
+          Number.isFinite(it.count) &&
+          it.count > 0
+      )
+      .map((it) => ({ ...it, color: it.color.toUpperCase() }));
+  }, [bom]);
+    
+  const totalPieces = useMemo(
+    () => bomMeta?.totalPieces ?? safeBom.reduce((s, it) => s + it.count, 0),
+    [bomMeta?.totalPieces, safeBom]
+  );
+  
+  const filteredBom = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return safeBom;
+    return safeBom.filter((it) => {
+      const part = it.part.toLowerCase();
+      const color = it.color.toLowerCase();
+      const shape = (it.part.match(/_(\d+)x(\d+)$/)?.[0] ?? "").toLowerCase(); // "_2x8"
+      return part.includes(q) || color.includes(q) || shape.includes(q);
+    });
+  }, [safeBom, query]);
+  
+  const sortedBom = useMemo(() => {
+    const arr = [...filteredBom];
+  
+    const colorRank = (c: string) => paletteOrder.get(c) ?? 9999;
+    const partRank = (p: string) => {
+      const m = p.match(/_(\d+)x(\d+)$/);
+      const area = m ? Number(m[1]) * Number(m[2]) : 1;
+      return -area; // 큰 파트 먼저
+    };
+  
+    if (sortMode === "MOST") {
+      arr.sort((a, b) => b.count - a.count || a.part.localeCompare(b.part) || a.color.localeCompare(b.color));
+    } else if (sortMode === "COLOR") {
+      arr.sort(
+        (a, b) =>
+          colorRank(a.color) - colorRank(b.color) ||
+          b.count - a.count ||
+          partRank(a.part) - partRank(b.part) ||
+          a.part.localeCompare(b.part)
+      );
+    } else {
+      arr.sort(
+        (a, b) =>
+          partRank(a.part) - partRank(b.part) ||
+          a.part.localeCompare(b.part) ||
+          b.count - a.count ||
+          colorRank(a.color) - colorRank(b.color)
+      );
+    }
+  
+    return arr;
+  }, [filteredBom, sortMode, paletteOrder]);
+  
+  const visibleBom = useMemo(() => {
+    return sortedBom.slice(0, showAll ? sortedBom.length : TOP_N);
+  }, [sortedBom, showAll]);
+  
+  const hasBom = useMemo(() => (bomMeta?.uniqueItems ?? safeBom.length) > 0, [bomMeta?.uniqueItems, safeBom.length]);
+  const moreCount = useMemo(() => Math.max(0, sortedBom.length - TOP_N), [sortedBom.length]);
+
+  useEffect(() => {
+      let cancelled = false;
+    
+      async function run() {
+        if (!result?.previewImageUrl || !result.palette8 || result.palette8.length !== 8) {
+          setBom(null);
+          setBomError(null);
+          setIsBomLoading(false);
+          return;
+        }
+    
+        try {
+          setIsBomLoading(true);
+          setBomError(null);
+    
+          // ✅ 64x64로 빠르게
+          const computed = await computeBomFromPreview(result.previewImageUrl, result.palette8, 64, 64);
+          if (cancelled) return;
+
+          // ✅ computeBomFromPreview는 { bom, totalPieces, totalStuds, uniqueItems } 리턴
+          setBom(computed.bom);
+          setBomMeta({ totalPieces: computed.totalPieces, totalStuds: computed.totalStuds, uniqueItems: computed.uniqueItems });
+
+          setSortMode("MOST");
+          setQuery("");
+          setShowAll(false);
+
+          // ✅ 총 브릭 수로 partsSummary 갱신 (reduce 금지)
+          setResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  partsSummary:
+                    language === "ko"
+                      ? `예상 브릭 수량: 총 ${computed.totalPieces.toLocaleString()}개`
+                      : `Estimated bricks: ${computed.totalPieces.toLocaleString()} pcs`,
+                }
+              : prev
+          );
+        } catch (e) {
+          if (cancelled) return;
+          setBom(null);
+          setBomMeta(null); 
+          setBomError(e instanceof Error ? e.message : "BOM error");
+        } finally {
+          if (!cancelled) setIsBomLoading(false);
+        }
+      }
+    
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }, [result?.previewImageUrl, result?.palette8, language]);
 
   const validateImageFile = (nextFile: File) => {
     if (nextFile.size > MAX_FILE_SIZE) {
@@ -147,6 +318,12 @@ export default function CreatePage() {
     setPreviewUrl(URL.createObjectURL(nextFile));
     setError(null);
     setResult(null);
+    setBom(null);
+    setBomMeta(null);
+    setBomError(null);
+    setSortMode("MOST");
+    setQuery("");
+    setShowAll(false);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -202,6 +379,8 @@ export default function CreatePage() {
         previewImageUrl: renderData.previewImageUrl,
         partsSummary: renderData.partsSummary || t.partsFallback,
         storyText: renderData.storyText || t.storyFallback,
+        palette8: (renderData as any).palette8,
+        dominant_color: (renderData as any).dominant_color,
         debug: renderData.debug,
       });
     } catch (err: unknown) {
@@ -326,6 +505,180 @@ export default function CreatePage() {
                   {t.nextStep}
                   <ArrowRight size={16} />
                 </Link>
+              </div>
+            )}
+            {result && (
+              <div className="space-y-4 rounded-[1.5rem] border border-zinc-200 bg-white p-6">
+                {/* 헤더 */}
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-zinc-900">
+                    {language === "ko" ? "필요 브릭(예상)" : "Bricks needed (estimate)"}
+                  </h3>
+                  {isBomLoading && (
+                    <span className="text-xs font-semibold text-zinc-500">
+                      {language === "ko" ? "계산 중…" : "Calculating…"}
+                    </span>
+                  )}
+                </div>
+
+                {/* 팔레트 */}
+                {result.palette8?.length === 8 && (
+                  <div className="flex flex-wrap gap-2">
+                    {result.palette8.map((c) => (
+                      <div key={c} className="flex items-center gap-2 rounded-full border px-3 py-1">
+                        <span className="h-3 w-3 rounded-full" style={{ background: c }} />
+                        <span className="text-xs font-mono text-zinc-600">{c}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 에러/빈상태 */}
+                {bomError && (
+                  <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-600">
+                    {bomError}
+                  </p>
+                )}
+
+                {!hasBom && !bomError && !isBomLoading && (
+                  <p className="text-xs font-semibold text-zinc-500">
+                    {language === "ko" ? "아직 BOM이 없습니다." : "No BOM yet."}
+                  </p>
+                )}
+
+                {/* 본문 */}
+                {hasBom && (
+                  <div className="space-y-4">
+                    {/* 합계 + 정렬 + 검색 */}
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-zinc-500">
+                          {language === "ko" ? "총 브릭(피스)" : "Total pieces"}:
+                        </span>
+                        <span className="rounded-full bg-zinc-900 px-2.5 py-1 text-xs font-black text-white">
+                          {totalPieces.toLocaleString()}
+                        </span>
+
+                        <span className="ml-2 text-xs font-semibold text-zinc-500">
+                          {language === "ko" ? "항목" : "Items"}:
+                        </span>
+                        <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-black text-zinc-900">
+                          {sortedBom.length}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        {/* 정렬 토글 */}
+                        <div className="inline-flex w-full items-center rounded-xl border bg-white p-1 sm:w-auto">
+                          <button
+                            type="button"
+                            onClick={() => setSortMode("MOST")}
+                            className={[
+                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
+                              sortMode === "MOST" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
+                            ].join(" ")}
+                          >
+                            {language === "ko" ? "많은 순" : "Most"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSortMode("COLOR")}
+                            className={[
+                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
+                              sortMode === "COLOR" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
+                            ].join(" ")}
+                          >
+                            {language === "ko" ? "색상별" : "Color"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSortMode("PART")}
+                            className={[
+                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
+                              sortMode === "PART" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
+                            ].join(" ")}
+                          >
+                            {language === "ko" ? "파트별" : "Part"}
+                          </button>
+                        </div>
+
+                        {/* 검색 */}
+                        <div className="relative w-full sm:w-[260px]">
+                          <input
+                            value={query}
+                            onChange={(e) => {
+                              setQuery(e.target.value);
+                              setShowAll(false);
+                            }}
+                            placeholder={language === "ko" ? "검색: 1x2, plate_2x8, #FFFFFF" : "Search: 1x2, plate_2x8, #FFFFFF"}
+                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-400"
+                          />
+                          {query && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuery("");
+                                setShowAll(false);
+                              }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs font-black text-zinc-600 hover:bg-zinc-100"
+                            >
+                              {language === "ko" ? "지움" : "Clear"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 4열 그리드 */}
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {visibleBom.map((it) => (
+                        <div key={`${it.part}-${it.color}`} className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="h-4 w-4 rounded-full border" style={{ background: it.color }} />
+                              <span className="text-[11px] font-mono text-zinc-500">{it.color}</span>
+                            </div>
+                            <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-xs font-black text-white">{it.count}</span>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-center">
+                            <BrickMini part={it.part} color={it.color} />
+                          </div>
+
+                          <div className="mt-3">
+                            <div className="text-xs font-black text-zinc-900">{it.part}</div>
+                            <div className="text-[11px] font-semibold text-zinc-500">
+                              {it.part.match(/_(\d+)x(\d+)$/)?.slice(1, 3).join("×") ?? "—"}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 더보기 */}
+                    {sortedBom.length > TOP_N && (
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-zinc-500">
+                          {language === "ko"
+                            ? showAll
+                              ? `전체 ${sortedBom.length}개 항목 표시 중`
+                              : `상위 ${TOP_N}개만 표시 중 (+ ${moreCount}개 더)`
+                            : showAll
+                              ? `Showing all ${sortedBom.length} items`
+                              : `Showing top ${TOP_N} (+ ${moreCount} more)`}
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowAll((v) => !v)}
+                          className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-black text-zinc-900 hover:bg-zinc-50"
+                        >
+                          {language === "ko" ? (showAll ? "접기" : "전체 보기") : showAll ? "Collapse" : "Show all"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

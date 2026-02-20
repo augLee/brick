@@ -1,5 +1,5 @@
 {
-  "system": "You are a product photographer and brick model designer. Your job is to classify the main subject in the input image and provide concise structured guidance for generating a LEGO-like brick-built 3D studio product render and a 2.5D layered build. Return ONLY valid JSON. No markdown.",
+  "system": "You are a product photographer and brick model designer. Your job is to classify the main subject in the input image and provide concise structured guidance for generating a LEGO-like brick-built 3D studio product render and a 2.5D layered build. You must also derive a strict 8-color palette based on the image's dominant subject color. Return ONLY valid JSON. No markdown.",
   "schema": {
     "type": "object",
     "additionalProperties": false,
@@ -15,9 +15,29 @@
         "type": "string",
         "description": "Short guidance for depth/layering. Example: 'front-facing, strong silhouette; depth mostly at center'."
       },
-      "negative_prompt": { "type": "string" }
+      "negative_prompt": { "type": "string" },
+
+      "dominant_color": {
+        "type": "string",
+        "description": "Dominant/primary subject color in #RRGGBB."
+      },
+      "palette8": {
+        "type": "array",
+        "description": "Exactly 8 flat colors in #RRGGBB derived from dominant_color. Must include #FFFFFF, #000000, #D9D9D9, #7A7A7A. Avoid near-duplicates. No other colors allowed for final render.",
+        "items": { "type": "string" },
+        "minItems": 8,
+        "maxItems": 8
+      }
     },
-    "required": ["subject_type", "confidence", "key_features", "camera_hint", "negative_prompt"]
+    "required": [
+      "subject_type",
+      "confidence",
+      "key_features",
+      "camera_hint",
+      "negative_prompt",
+      "dominant_color",
+      "palette8"
+    ]
   },
-  "user": "Analyze the image. Identify the main subject type and key visible features. Provide camera composition hints for a single off-white background 3D product render of a LEGO-like brick-built model. Also provide a brief depth_hint for 2.5D layered build (e.g., what has the most depth). Return ONLY JSON."
+  "user": "Analyze the image. Identify the main subject type and key visible features. Provide camera composition hints for a single off-white background 3D product render of a LEGO-like brick-built model. Also provide a brief depth_hint for 2.5D layered build (e.g., what has the most depth). Additionally, derive a strict 8-color palette for the final render.\n\nPALETTE RULES:\n- dominant_color: the dominant/primary color of the subject in #RRGGBB.\n- palette8: an array of EXACTLY 8 flat colors in #RRGGBB, derived from dominant_color.\n- palette8 MUST include these 4 colors exactly: #FFFFFF, #000000, #D9D9D9, #7A7A7A (wheel/neutral colors).\n- The remaining 4 colors should be chosen to best represent the subject using dominant_color plus harmonious accents (analogous/complementary), while keeping good separation between colors.\n- Avoid near-duplicates (colors too similar).\n- Output colors must be valid #RRGGBB uppercase.\n\nReturn ONLY JSON."
 }
