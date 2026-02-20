@@ -23,16 +23,35 @@ type MetaJson = {
   mask64: number[][];
 };
 
-function isValidMeta(meta: any): meta is MetaJson {
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function isMask64(v: unknown): v is number[][] {
   return (
-    meta &&
-    typeof meta.previewImageUrl === "string" &&
-    Array.isArray(meta.palette8) &&
-    meta.palette8.length === 8 &&
-    Array.isArray(meta.mask64) &&
-    meta.mask64.length === 64
+    Array.isArray(v) &&
+    v.length === 64 &&
+    v.every(
+      (row) =>
+        Array.isArray(row) &&
+        row.length === 64 &&
+        row.every((n) => typeof n === "number" && (n === 0 || n === 1))
+    )
   );
 }
+
+function isValidMeta(meta: unknown): meta is MetaJson {
+  if (!meta || typeof meta !== "object") return false;
+  const m = meta as Record<string, unknown>;
+
+  return (
+    typeof m.previewImageUrl === "string" &&
+    isStringArray(m.palette8) &&
+    m.palette8.length === 8 &&
+    isMask64(m.mask64)
+  );
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -62,17 +81,15 @@ export async function GET(req: Request) {
     const hasFile = (name: string) => filesArr.some((f) => f.name === name);
     const findStartsWith = (prefix: string) => filesArr.find((f) => f.name.startsWith(prefix));
 
-    // 2) meta.json 다운로드 (클라이언트가 직접 못 읽으니 여기서 내려줘야 함)
+    // 2) meta.json 다운로드
     let meta: MetaJson | null = null;
     const metaPath = `${renderFolder}/meta.json`;
-    const { data: metaFile, error: metaErr } = await supabaseAdmin.storage
-      .from(publicBucket)
-      .download(metaPath);
+    const { data: metaFile, error: metaErr } = await supabaseAdmin.storage.from(publicBucket).download(metaPath);
 
     if (!metaErr && metaFile) {
       try {
         const metaText = await metaFile.text();
-        const parsed = JSON.parse(metaText);
+        const parsed: unknown = JSON.parse(metaText);
         if (isValidMeta(parsed)) meta = parsed;
       } catch {
         meta = null;
@@ -89,7 +106,6 @@ export async function GET(req: Request) {
         : meta?.previewImageUrl;
 
     if (!previewUrl) {
-      // preview도 meta도 없으면 jobId 자체가 깨진 케이스
       return NextResponse.json({ error: "해당 jobId의 미리보기/메타를 찾을 수 없습니다." }, { status: 404 });
     }
 
@@ -117,7 +133,6 @@ export async function GET(req: Request) {
       note: "부품표(CSV)는 최초 1회 생성 후 다운로드할 수 있습니다.",
     };
 
-    // ✅ CSV가 없을 때만 meta 내려줌(용량 절약 + 보안적으로도 노출 최소화)
     if (!csvExists && meta) {
       payload.meta = {
         previewImageUrl: meta.previewImageUrl,
@@ -126,16 +141,13 @@ export async function GET(req: Request) {
       };
     }
 
-    // meta가 없으면 클라이언트가 BOM 계산을 못하니 안내
     if (!csvExists && !meta) {
-      payload.note =
-        "부품표 생성에 필요한 meta.json이 없습니다. (generate-render에서 meta 저장이 되었는지 확인 필요)";
+      payload.note = "부품표 생성에 필요한 meta.json이 없습니다. (generate-render에서 meta 저장이 되었는지 확인 필요)";
     }
 
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : "다운로드 패키지 생성 중 오류가 발생했습니다.";
+    const message = error instanceof Error ? error.message : "다운로드 패키지 생성 중 오류가 발생했습니다.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

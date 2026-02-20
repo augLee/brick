@@ -232,27 +232,7 @@ export default function CreatePage() {
   }, [sortedBom, showAll]);
   
   const hasBom = useMemo(() => (bomMeta?.uniqueItems ?? safeBom.length) > 0, [bomMeta?.uniqueItems, safeBom.length]);
-  const moreCount = useMemo(() => Math.max(0, sortedBom.length - TOP_N), [sortedBom.length]);
-  const maskPreviewUrl = useMemo(() => {
-    const mask = result?.mask64;
-    const valid =
-      Array.isArray(mask) &&
-      mask.length === 64 &&
-      mask.every((row) => Array.isArray(row) && row.length === 64);
-    if (!valid || !mask) return null;
-
-    const pixels: string[] = [];
-    for (let y = 0; y < 64; y++) {
-      for (let x = 0; x < 64; x++) {
-        if (mask[y][x] === 1) {
-          pixels.push(`<rect x="${x}" y="${y}" width="1" height="1" fill="#FFFFFF"/>`);
-        }
-      }
-    }
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="#000000"/>${pixels.join("")}</svg>`;
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  }, [result?.mask64]);
+  const moreCount = useMemo(() => Math.max(0, sortedBom.length - TOP_N), [sortedBom.length]);  
 
   useEffect(() => {
       let cancelled = false;
@@ -356,6 +336,37 @@ export default function CreatePage() {
     if (!selectedFile) return;
     selectFile(selectedFile);
   };
+  function isStringArray(v: unknown): v is string[] {
+    return Array.isArray(v) && v.every((x) => typeof x === "string");
+  }
+
+  function isMask64(v: unknown): v is number[][] {
+    return (
+      Array.isArray(v) &&
+      v.length === 64 &&
+      v.every(
+        (row) =>
+          Array.isArray(row) &&
+          row.length === 64 &&
+          row.every((n) => typeof n === "number" && (n === 0 || n === 1))
+      )
+    );
+  }
+
+  function pickExtraFields(v: unknown): {
+    palette8?: string[];
+    mask64?: number[][];
+    dominant_color?: string;
+  } {
+    if (!v || typeof v !== "object") return {};
+    const r = v as Record<string, unknown>;
+
+    const palette8 = isStringArray(r.palette8) ? r.palette8 : undefined;
+    const mask64 = isMask64(r.mask64) ? r.mask64 : undefined;
+    const dominant_color = typeof r.dominant_color === "string" ? r.dominant_color : undefined;
+
+    return { palette8, mask64, dominant_color };
+  }
 
   const generateBrickArt = async () => {
     if (!file) return;
@@ -399,14 +410,14 @@ export default function CreatePage() {
         });
       }
 
+      const extra = pickExtraFields(renderData);
+
       setResult({
         jobId: renderData.jobId,
         previewImageUrl: renderData.previewImageUrl,
         partsSummary: renderData.partsSummary || t.partsFallback,
         storyText: renderData.storyText || t.storyFallback,
-        palette8: (renderData as any).palette8,
-        mask64: (renderData as any).mask64,
-        dominant_color: (renderData as any).dominant_color,
+        ...extra,
         debug: renderData.debug,
       });
     } catch (err: unknown) {
