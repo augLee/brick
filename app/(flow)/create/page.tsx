@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
 import { clearAdminLogs, pushAdminLog } from "@/lib/admin-logs";
-import { isAdminModeEnabled, isLayerVisibleEnabled } from "@/lib/admin-mode";
+import { isAdminModeEnabled } from "@/lib/admin-mode";
 import { useLanguage, type SiteLanguage } from "@/components/LanguageProvider";
 import type { BomItem } from "@/lib/bom-client";
 import { computeBomFromPreview } from "@/lib/bom-client";
@@ -39,7 +39,7 @@ const copy = {
     uploadError: "업로드에 실패했습니다.",
     renderError: "렌더 생성에 실패했습니다.",
     partsFallback: "부품 수량 분석 결과가 준비되었습니다.",
-    storyFallback: "브릭 디자인이 생성되었습니다.",
+    storyFallback: "스토리 카드와 조립 가이드는 현재 준비중입니다.",
     unknownError: "알 수 없는 오류가 발생했습니다.",
     uploadTitle: "사진 업로드",
     uploadDesc: "인물, 사물, 건축물 어떤 사진이든 업로드해보세요.",
@@ -73,7 +73,7 @@ const copy = {
     uploadError: "Upload failed.",
     renderError: "Render generation failed.",
     partsFallback: "Part quantity analysis is ready.",
-    storyFallback: "Your brick design has been generated.",
+    storyFallback: "Story card and build guide are currently in preparation.",
     unknownError: "An unknown error occurred.",
     uploadTitle: "Upload Photo",
     uploadDesc: "Upload any photo: portrait, object, or architecture.",
@@ -429,17 +429,6 @@ export default function CreatePage() {
               <h1 className="text-3xl font-black tracking-tight md:text-4xl">{t.uploadTitle}</h1>
               <p className="mt-2 text-sm font-medium text-zinc-500">{t.uploadDesc}</p>
             </div>
-            {isAdminModeEnabled && (
-              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs font-semibold text-zinc-600">
-                {t.adminLabel} <span className="text-emerald-600">ON</span>
-                {" / "}
-                {t.layerLabel}{" "}
-                <span className={isLayerVisibleEnabled ? "text-emerald-600" : "text-zinc-500"}>
-                  {isLayerVisibleEnabled ? "ON" : "OFF"}
-                </span>
-              </div>
-            )}
-
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -485,17 +474,23 @@ export default function CreatePage() {
             <button
               type="button"
               onClick={generateBrickArt}
-              disabled={!file || isUploading || isGenerating}
+              disabled={!file || !!result || isUploading || isGenerating}
               className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#C2410C] px-4 py-4 text-base font-bold text-white transition hover:bg-[#B8430A] disabled:cursor-not-allowed disabled:bg-zinc-300"
             >
-              {isUploading ? (
+              {isUploading || isGenerating ? (
                 <Loader2 size={18} className="animate-spin" />
-              ) : isGenerating ? (
-                <Loader2 size={18} className="animate-spin" />
+              ) : result ? (
+                <CheckCircle2 size={18} />
               ) : (
                 <Upload size={18} />
               )}
-              {isUploading ? t.uploading : isGenerating ? t.generating : t.generate}
+              {isUploading
+                ? t.uploading
+                : isGenerating
+                  ? t.generating
+                  : result
+                    ? (language === "ko" ? "이미 생성 완료" : "Already generated")
+                    : t.generate}
             </button>
           </div>
 
@@ -511,24 +506,11 @@ export default function CreatePage() {
               ) : (
                 <div className="flex h-full items-center justify-center p-10 text-center text-sm font-semibold text-zinc-400">{t.noResult}</div>
               )}
-            </div>
-            {result && maskPreviewUrl && (
-              <div className="rounded-[1.5rem] border border-zinc-200 bg-white p-4">
-                <div className="mb-3">
-                  <p className="text-sm font-black text-zinc-900">{t.maskTitle}</p>
-                  <p className="text-xs font-medium text-zinc-500">{t.maskDesc}</p>
-                </div>
-                <div className="overflow-hidden rounded-xl border border-zinc-200 bg-black">
-                  <img
-                    src={maskPreviewUrl}
-                    alt={t.maskTitle}
-                    className="block h-full w-full object-contain [image-rendering:pixelated]"
-                  />
-                </div>
-              </div>
-            )}
-
-            {result && (
+            </div>            
+          </div>
+          {result && (
+            <section className="md:col-span-2 space-y-6">
+              {/* 완료 카드 */}
               <div className="space-y-4 rounded-[1.5rem] border border-orange-100 bg-orange-50 p-6">
                 <div className="flex items-center gap-2 text-[#C2410C]">
                   <CheckCircle2 size={18} />
@@ -547,158 +529,149 @@ export default function CreatePage() {
                   <ArrowRight size={16} />
                 </Link>
               </div>
-            )}
-            {result && (
-              <div className="space-y-4 rounded-[1.5rem] border border-zinc-200 bg-white p-6">
-                {/* 헤더 */}
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-black text-zinc-900">
-                    {language === "ko" ? "필요 브릭(예상)" : "Bricks needed (estimate)"}
-                  </h3>
+
+              {/* BOM */}
+              <section className="rounded-[1.75rem] border border-zinc-200 bg-white p-6 shadow-sm">
+                {/* 여기부터 아래는 네가 이미 넣어둔 BOM 내용 그대로 */}
+                {/* Header */}
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="space-y-1">
+                    <h3 className="text-base font-black text-zinc-900">
+                      {language === "ko" ? "필요 브릭(예상)" : "Bricks needed (estimate)"}
+                    </h3>
+                    <p className="text-xs font-semibold text-zinc-500">
+                      {language === "ko" ? "팔레트 기반으로 48×48 영역의 브릭을 추정합니다." : "Estimation from 48×48 region using palette."}
+                    </p>
+                  </div>
+
+                  <div className="grid w-full grid-cols-3 gap-2 md:w-auto md:min-w-[420px]">
+                    <div className="rounded-2xl border bg-zinc-50 px-4 py-3">
+                      <div className="text-[11px] font-bold text-zinc-500">{language === "ko" ? "총 피스" : "Pieces"}</div>
+                      <div className="mt-1 text-lg font-black text-zinc-900">{totalPieces.toLocaleString()}</div>
+                    </div>
+                    <div className="rounded-2xl border bg-zinc-50 px-4 py-3">
+                      <div className="text-[11px] font-bold text-zinc-500">{language === "ko" ? "항목" : "Items"}</div>
+                      <div className="mt-1 text-lg font-black text-zinc-900">{sortedBom.length.toLocaleString()}</div>
+                    </div>
+                    <div className="rounded-2xl border bg-zinc-50 px-4 py-3">
+                      <div className="text-[11px] font-bold text-zinc-500">{language === "ko" ? "팔레트" : "Palette"}</div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {(result.palette8 ?? []).slice(0, 8).map((c) => (
+                          <span key={c} className="h-4 w-4 rounded-full border" style={{ background: c }} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Loading / Errors */}
+                <div className="mt-4">
                   {isBomLoading && (
-                    <span className="text-xs font-semibold text-zinc-500">
-                      {language === "ko" ? "계산 중…" : "Calculating…"}
-                    </span>
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs font-semibold text-zinc-600">
+                      {language === "ko" ? "BOM 계산 중…" : "Calculating BOM…"}
+                    </div>
+                  )}
+                  {bomError && (
+                    <div className="mt-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">
+                      {bomError}
+                    </div>
+                  )}
+                  {!hasBom && !bomError && !isBomLoading && (
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-xs font-semibold text-zinc-500">
+                      {language === "ko" ? "아직 BOM이 없습니다." : "No BOM yet."}
+                    </div>
                   )}
                 </div>
 
-                {/* 팔레트 */}
-                {result.palette8?.length === 8 && (
-                  <div className="flex flex-wrap gap-2">
-                    {result.palette8.map((c) => (
-                      <div key={c} className="flex items-center gap-2 rounded-full border px-3 py-1">
-                        <span className="h-3 w-3 rounded-full" style={{ background: c }} />
-                        <span className="text-xs font-mono text-zinc-600">{c}</span>
-                      </div>
-                    ))}
+                {/* Controls */}
+                {hasBom && (
+                  <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="relative w-full md:max-w-[420px]">
+                      <input
+                        value={query}
+                        onChange={(e) => {
+                          setQuery(e.target.value);
+                          setShowAll(false);
+                        }}
+                        placeholder={language === "ko" ? "검색: part / 1x2 / #FFFFFF" : "Search: part / 1x2 / #FFFFFF"}
+                        className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-400"
+                      />
+                      {query && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setQuery("");
+                            setShowAll(false);
+                          }}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-black text-zinc-700 hover:bg-zinc-50"
+                        >
+                          {language === "ko" ? "지움" : "Clear"}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="inline-flex w-full items-center justify-between gap-1 rounded-2xl border border-zinc-200 bg-zinc-50 p-1 md:w-auto">
+                      {([
+                        ["MOST", language === "ko" ? "많은 순" : "Most"],
+                        ["COLOR", language === "ko" ? "색상" : "Color"],
+                        ["PART", language === "ko" ? "파트" : "Part"],
+                      ] as const).map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setSortMode(key)}
+                          className={[
+                            "flex-1 rounded-2xl px-4 py-2 text-xs font-black md:flex-none",
+                            sortMode === key ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-white",
+                          ].join(" ")}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {/* 에러/빈상태 */}
-                {bomError && (
-                  <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-600">
-                    {bomError}
-                  </p>
-                )}
-
-                {!hasBom && !bomError && !isBomLoading && (
-                  <p className="text-xs font-semibold text-zinc-500">
-                    {language === "ko" ? "아직 BOM이 없습니다." : "No BOM yet."}
-                  </p>
-                )}
-
-                {/* 본문 */}
+                {/* List */}
                 {hasBom && (
-                  <div className="space-y-4">
-                    {/* 합계 + 정렬 + 검색 */}
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-zinc-500">
-                          {language === "ko" ? "총 브릭(피스)" : "Total pieces"}:
-                        </span>
-                        <span className="rounded-full bg-zinc-900 px-2.5 py-1 text-xs font-black text-white">
-                          {totalPieces.toLocaleString()}
-                        </span>
-
-                        <span className="ml-2 text-xs font-semibold text-zinc-500">
-                          {language === "ko" ? "항목" : "Items"}:
-                        </span>
-                        <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-black text-zinc-900">
-                          {sortedBom.length}
-                        </span>
-                      </div>
-
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        {/* 정렬 토글 */}
-                        <div className="inline-flex w-full items-center rounded-xl border bg-white p-1 sm:w-auto">
-                          <button
-                            type="button"
-                            onClick={() => setSortMode("MOST")}
-                            className={[
-                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
-                              sortMode === "MOST" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
-                            ].join(" ")}
-                          >
-                            {language === "ko" ? "많은 순" : "Most"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSortMode("COLOR")}
-                            className={[
-                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
-                              sortMode === "COLOR" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
-                            ].join(" ")}
-                          >
-                            {language === "ko" ? "색상별" : "Color"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSortMode("PART")}
-                            className={[
-                              "flex-1 rounded-lg px-3 py-2 text-xs font-black sm:flex-none",
-                              sortMode === "PART" ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-50",
-                            ].join(" ")}
-                          >
-                            {language === "ko" ? "파트별" : "Part"}
-                          </button>
-                        </div>
-
-                        {/* 검색 */}
-                        <div className="relative w-full sm:w-[260px]">
-                          <input
-                            value={query}
-                            onChange={(e) => {
-                              setQuery(e.target.value);
-                              setShowAll(false);
-                            }}
-                            placeholder={language === "ko" ? "검색: 1x2, plate_2x8, #FFFFFF" : "Search: 1x2, plate_2x8, #FFFFFF"}
-                            className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-400"
-                          />
-                          {query && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setQuery("");
-                                setShowAll(false);
-                              }}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs font-black text-zinc-600 hover:bg-zinc-100"
-                            >
-                              {language === "ko" ? "지움" : "Clear"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                  <div className="mt-4 overflow-hidden rounded-2xl border border-zinc-200">
+                    <div className="grid grid-cols-12 bg-zinc-50 px-4 py-3 text-[11px] font-black text-zinc-600">
+                      <div className="col-span-5">{language === "ko" ? "파트" : "Part"}</div>
+                      <div className="col-span-3">{language === "ko" ? "색상" : "Color"}</div>
+                      <div className="col-span-2 text-right">{language === "ko" ? "수량" : "Qty"}</div>
+                      <div className="col-span-2 text-right">{language === "ko" ? "미리보기" : "Mini"}</div>
                     </div>
 
-                    {/* 4열 그리드 */}
-                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="max-h-[70vh] overflow-auto bg-white">
                       {visibleBom.map((it) => (
-                        <div key={`${it.part}-${it.color}`} className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <span className="h-4 w-4 rounded-full border" style={{ background: it.color }} />
-                              <span className="text-[11px] font-mono text-zinc-500">{it.color}</span>
-                            </div>
-                            <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-xs font-black text-white">{it.count}</span>
-                          </div>
-
-                          <div className="mt-3 flex items-center justify-center">
-                            <BrickMini part={it.part} color={it.color} />
-                          </div>
-
-                          <div className="mt-3">
-                            <div className="text-xs font-black text-zinc-900">{it.part}</div>
+                        <div key={`${it.part}-${it.color}`} className="grid grid-cols-12 items-center gap-2 border-t border-zinc-100 px-4 py-3">
+                          <div className="col-span-5 min-w-0">
+                            <div className="truncate text-sm font-black text-zinc-900">{it.part}</div>
                             <div className="text-[11px] font-semibold text-zinc-500">
                               {it.part.match(/_(\d+)x(\d+)$/)?.slice(1, 3).join("×") ?? "—"}
+                            </div>
+                          </div>
+
+                          <div className="col-span-3 flex min-w-0 items-center gap-2">
+                            <span className="h-4 w-4 shrink-0 rounded-full border" style={{ background: it.color }} />
+                            <span className="truncate text-xs font-mono font-bold text-zinc-600">{it.color}</span>
+                          </div>
+
+                          <div className="col-span-2 text-right">
+                            <span className="inline-flex rounded-full bg-zinc-900 px-2.5 py-1 text-xs font-black text-white">{it.count}</span>
+                          </div>
+
+                          <div className="col-span-2 flex justify-end">
+                            <div className="scale-[0.85] origin-right">
+                              <BrickMini part={it.part} color={it.color} />
                             </div>
                           </div>
                         </div>
                       ))}
                     </div>
 
-                    {/* 더보기 */}
                     {sortedBom.length > TOP_N && (
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between bg-white px-4 py-3">
                         <p className="text-xs font-semibold text-zinc-500">
                           {language === "ko"
                             ? showAll
@@ -720,16 +693,9 @@ export default function CreatePage() {
                     )}
                   </div>
                 )}
-              </div>
-            )}
-
-            {!result && !isUploading && !isGenerating && (
-              <div className="inline-flex items-center gap-2 rounded-xl bg-zinc-100 px-4 py-3 text-xs font-semibold text-zinc-500">
-                <Sparkles size={14} />
-                {t.resultWait}
-              </div>
-            )}
-          </div>
+              </section>
+            </section>
+          )}            
         </div>
       </main>
     </div>

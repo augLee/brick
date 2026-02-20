@@ -50,11 +50,20 @@ function nearestPaletteColor(r: number, g: number, b: number, palette: string[])
 }
 
 async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  const shouldUseProxy =
+    !dataUrl.startsWith("data:") &&
+    !dataUrl.startsWith("/api/image-proxy");
+
+  const src = shouldUseProxy
+    ? `/api/image-proxy?url=${encodeURIComponent(dataUrl)}`
+    : dataUrl;
+
   return await new Promise((resolve, reject) => {
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = dataUrl;
+    img.src = src;
   });
 }
 

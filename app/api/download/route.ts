@@ -35,17 +35,15 @@ export async function GET(req: Request) {
     const { data: previewUrlData } = supabaseAdmin.storage.from(publicBucket).getPublicUrl(previewPath);
 
     const csv = `part,colorId,qty\nbrick_2x4,C02,12\nbrick_1x2,C01,28\nplate_1x1,C03,44\n`;
-    const txt = `Brickify Story Card\njobId: ${jobId}\n\n사진의 분위기를 살린 브릭 작품을 완성해보세요.`;
-
     return NextResponse.json({
       jobId,
       files: [
         { name: `brickify-${previewFile.name}`, url: previewUrlData.publicUrl },
         { name: "parts-list.csv", url: `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}` },
-        { name: "build-guide.pdf", status: "준비중"},
-        { name: "story-card.txt", url: `data:text/plain;charset=utf-8,${encodeURIComponent(txt)}` },
+        { name: "build-guide.pdf", status: "준비중" },
+        { name: "story-card.txt", status: "준비중" },
       ],
-      note: "조립 가이드는 현재 준비중입니다.",
+      note: "조립 가이드와 스토리 카드는 현재 준비중입니다.",
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "다운로드 패키지 생성 중 오류가 발생했습니다.";

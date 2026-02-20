@@ -22,7 +22,7 @@ const copy = {
     unknownError: "알 수 없는 오류가 발생했습니다.",
     titlePaid: "결제가 완료되었습니다",
     titleAdmin: "다운로드 준비가 완료되었습니다",
-    subtitle: "아래 파일을 다운로드해 바로 조립을 시작하세요.",
+    subtitle: "미리보기와 부품표는 다운로드할 수 있고, 조립 가이드/스토리 카드는 준비중입니다.",
     preparing: "다운로드 패키지 준비 중...",
     download: "다운로드",
     preparingStatus: "준비중",
@@ -38,7 +38,7 @@ const copy = {
     unknownError: "An unknown error occurred.",
     titlePaid: "Payment Complete",
     titleAdmin: "Download Is Ready",
-    subtitle: "Download the files below and start building right away.",
+    subtitle: "Preview and parts list are available now; build guide and story card are still preparing.",
     preparing: "Preparing download package...",
     download: "Download",
     preparingStatus: "Preparing",
@@ -156,7 +156,7 @@ export default function SuccessPage() {
                   >
                     <div>{file.name}</div>
                     <div className="text-right text-xs font-bold text-zinc-500">
-                      <p>{file.status || t.preparingStatus}</p>
+                      <p>{file.status === "준비중" ? t.preparingStatus : file.status || t.preparingStatus}</p>
                       {file.capacity && <p>{file.capacity}</p>}
                     </div>
                   </div>

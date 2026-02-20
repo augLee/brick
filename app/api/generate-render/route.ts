@@ -103,7 +103,7 @@ const SUPABASE_MIME_TO_EXT: Record<string, string> = {
   "image/svg+xml": "svg",
 };
 
-const OPENAI_VISION_TIMEOUT_MS = Number(process.env.OPENAI_VISION_TIMEOUT_MS || 25000);
+const OPENAI_VISION_TIMEOUT_MS = Number(process.env.OPENAI_VISION_TIMEOUT_MS || 60000);
 const GEMINI_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_TIMEOUT_MS || 45000);
 const OPENAI_IMAGE_TIMEOUT_MS = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 70000);
 const OPENAI_VISION_MAX_TOKENS = Number(process.env.OPENAI_VISION_MAX_TOKENS || 900);
@@ -124,6 +124,30 @@ function shortHash(value: string) {
 
 function createEmptyMask64(): number[][] {
   return Array.from({ length: 64 }, () => Array.from({ length: 64 }, () => 0));
+}
+
+function createCenterMask64(radiusRatio = 0.38): number[][] {
+  const cx = 31.5, cy = 31.5;
+  const r = 64 * radiusRatio;
+  const r2 = r * r;
+  return Array.from({ length: 64 }, (_, y) =>
+    Array.from({ length: 64 }, (_, x) => {
+      const dx = x - cx, dy = y - cy;
+      return dx * dx + dy * dy <= r2 ? 1 : 0;
+    })
+  );
+}
+
+function maskCoverage(mask: number[][]): number {
+  let on = 0;
+  for (const row of mask) for (const v of row) if (v === 1) on++;
+  return on / (64 * 64);
+}
+
+function clampMask64(mask: number[][]): number[][] {
+  const cov = maskCoverage(mask);
+  if (cov < 0.02 || cov > 0.92) return createCenterMask64();
+  return mask;
 }
 
 // --- 유틸 ---
@@ -161,18 +185,79 @@ function ensurePalette8(raw: unknown): string[] {
 }
 
 function ensureMask64(raw: unknown): number[][] {
-  if (!Array.isArray(raw) || raw.length !== 64) return createEmptyMask64();
+  const normalizeCell = (value: unknown): 0 | 1 => {
+    if (value === 1 || value === "1" || value === true) return 1;
+    if (value === 0 || value === "0" || value === false) return 0;
+    return 0;
+  };
 
-  const out: number[][] = [];
-  for (const row of raw) {
-    if (!Array.isArray(row) || row.length !== 64) return createEmptyMask64();
-    const nextRow: number[] = [];
-    for (const cell of row) {
-      nextRow.push(cell === 1 ? 1 : 0);
+  const to64Matrix = (rows: unknown[]): number[][] => {
+    if (rows.length !== 64) return createEmptyMask64();
+    const out: number[][] = [];
+    for (const row of rows) {
+      if (!Array.isArray(row) || row.length !== 64) return createEmptyMask64();
+      out.push(row.map((cell) => normalizeCell(cell)));
     }
-    out.push(nextRow);
+    return out;
+  };
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return createEmptyMask64();
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 4096) {
+          const out: number[][] = [];
+          for (let y = 0; y < 64; y++) {
+            const row: number[] = [];
+            for (let x = 0; x < 64; x++) {
+              row.push(normalizeCell(parsed[y * 64 + x]));
+            }
+            out.push(row);
+          }
+          return out;
+        }
+
+        if (Array.isArray(parsed[0])) {
+          return to64Matrix(parsed);
+        }
+      }
+    } catch {
+      const flat = trimmed.replace(/[^01]/g, "");
+      if (flat.length >= 4096) {
+        const out: number[][] = [];
+        for (let y = 0; y < 64; y++) {
+          const row: number[] = [];
+          for (let x = 0; x < 64; x++) {
+            row.push(flat[y * 64 + x] === "1" ? 1 : 0);
+          }
+          out.push(row);
+        }
+        return out;
+      }
+      return createEmptyMask64();
+    }
   }
-  return out;
+
+  if (Array.isArray(raw) && raw.length === 4096) {
+    const out: number[][] = [];
+    for (let y = 0; y < 64; y++) {
+      const row: number[] = [];
+      for (let x = 0; x < 64; x++) {
+        row.push(normalizeCell(raw[y * 64 + x]));
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
+  if (Array.isArray(raw) && raw.length === 64 && raw.every((row) => Array.isArray(row))) {
+    return to64Matrix(raw);
+  }
+
+  return createEmptyMask64();
 }
 
 function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
@@ -185,7 +270,7 @@ function coerceAnalysis(raw: Partial<VisionAnalysis>): VisionAnalysis {
         ? normalizeHex(raw.dominant_color)!
         : fallbackAnalysis.dominant_color,
     palette8: ensurePalette8(raw.palette8),
-    mask64: ensureMask64(raw.mask64),
+    mask64: clampMask64(ensureMask64(raw.mask64)),
   };
 }
 
@@ -400,22 +485,25 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
   }
 
   const maskInstruction = `
-Return strict JSON only.
-Required fields:
-- subject_type: "person" | "architecture" | "vehicle" | "animal" | "object" | "scene" | "other"
-- confidence: number
-- key_features: string[]
-- camera_hint: string
-- negative_prompt: string
-- dominant_color: "#RRGGBB"
-- palette8: exactly 8 unique "#RRGGBB" values
-- mask64: 64x64 binary matrix (array of 64 rows, each 64 cells, each cell is 0 or 1)
-Mask rule:
-- 1 means subject/lego-object area to include for BOM.
-- 0 means background to exclude from BOM.
-`.trim();
+      Return strict JSON only.
+      Required fields:
+      - subject_type: "person" | "architecture" | "vehicle" | "animal" | "object" | "scene" | "other"
+      - confidence: number
+      - key_features: string[]
+      - camera_hint: string
+      - negative_prompt: string
+      - dominant_color: "#RRGGBB"
+      - palette8: exactly 8 unique "#RRGGBB" values
+      - mask64: 64x64 binary matrix (array of 64 rows, each 64 cells, each cell is 0 or 1)
+      Mask rule:
+      - 1 means subject/lego-object area to include for BOM.
+      - 0 means background to exclude from BOM.
+      `.trim();
+    
+    const inputImagePayload = await fetchInputImagePayload(inputImageUrl);
+    const dataUrl = `data:${inputImagePayload.mimeType};base64,${inputImagePayload.data}`;
 
-  const res = await fetchWithRetryAndTimeout(`${baseUrl}/v1/chat/completions`, {
+    const res = await fetchWithRetryAndTimeout(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -429,10 +517,10 @@ Mask rule:
           content: [
             { type: "text", text: visionPrompt.user },
             { type: "text", text: maskInstruction },
-            { type: "image_url", image_url: { url: inputImageUrl, detail: "low" } },
+            { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
           ],
         },
-      ],
+      ],      
     }),
   }, OPENAI_VISION_TIMEOUT_MS);
 
@@ -639,7 +727,7 @@ export async function POST(req: Request) {
       console.error(`[generate-render][${traceId}] vision:analyze:error`, err);
       const isTimeout = err instanceof Error && err.name === "AbortError";
       analysis = isTimeout
-        ? { ...fallbackAnalysis, mask64: createEmptyMask64() }
+        ? { ...fallbackAnalysis, mask64: createCenterMask64() }
         : fallbackAnalysis;
       logStep(traceId, "vision:analyze:fallback");
     }
@@ -693,13 +781,12 @@ export async function POST(req: Request) {
 
     // ✅ moderation_blocked 완화: 이미지 생성에만 Safe Prefix
     const SAFE_PREFIX = `
-      Create a clean studio product photo of a fully 3D LEGO model (like an official LEGO set).
-      White/off-white background (#FAF9F6), centered, sharp, realistic LEGO plastic.
-      Must be a freestanding full 3D object with visible side faces and depth.
-      NOT a flat mosaic, NOT a relief, NOT wall-mounted art, NOT a baseplate portrait.
+      Create a clean studio product photo of a fully 3D LEGO model (official LEGO set style).
+      Background: off-white (#FAF9F6). Centered. Sharp. Realistic LEGO plastic.
+      Freestanding 3D object with visible side faces and depth. Soft ground shadow only.
       No text, no logos, no watermark.
       No nudity, no violence, no weapons, no hate symbols, no political content.
-      If the input depicts a person, keep the silhouette, hairstyle, and outfit recognizable, but render as a LEGO-style toy figure (no real-person photo likeness).
+      If the input depicts a person, render as a generic LEGO minifigure-style toy (no real-person likeness).
       `.trim();
 
 
@@ -807,7 +894,7 @@ export async function POST(req: Request) {
       jobId,
       previewImageUrl: storedPreviewImageUrl,
       palette8: palette,
-      mask64: analysis.mask64 ?? createEmptyMask64(),
+      mask64: clampMask64(analysis.mask64 ?? createCenterMask64()),
       dominant_color: analysis.dominant_color,
       storyText: `${analysis.subject_type} 변환 완료`,
     };
