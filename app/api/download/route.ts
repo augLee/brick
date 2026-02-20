@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getSupabaseAdminClient, publicBucket } from "@/lib/supabase";
 
 export const runtime = "edge";
 
@@ -11,13 +12,35 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "jobId가 필요합니다." }, { status: 400 });
     }
 
+    const supabaseAdmin = getSupabaseAdminClient();
+    if (!supabaseAdmin) {
+      return NextResponse.json({ error: "SUPABASE 환경변수를 확인해주세요." }, { status: 500 });
+    }
+
+    const renderFolder = `renders/${jobId}`;
+    const { data: renderFiles, error: listError } = await supabaseAdmin.storage
+      .from(publicBucket)
+      .list(renderFolder, { limit: 100 });
+
+    if (listError) {
+      return NextResponse.json({ error: listError.message || "렌더 파일 조회 실패" }, { status: 500 });
+    }
+
+    const previewFile = (renderFiles ?? []).find((file) => file.name.startsWith("preview."));
+    if (!previewFile) {
+      return NextResponse.json({ error: "해당 jobId의 미리보기 이미지를 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    const previewPath = `${renderFolder}/${previewFile.name}`;
+    const { data: previewUrlData } = supabaseAdmin.storage.from(publicBucket).getPublicUrl(previewPath);
+
     const csv = `part,colorId,qty\nbrick_2x4,C02,12\nbrick_1x2,C01,28\nplate_1x1,C03,44\n`;
     const txt = `Brickify Story Card\njobId: ${jobId}\n\n사진의 분위기를 살린 브릭 작품을 완성해보세요.`;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"><rect width="1024" height="1024" fill="#FAF9F6"/><rect x="300" y="520" width="170" height="150" rx="18" fill="#27272A"/><rect x="500" y="520" width="170" height="150" rx="18" fill="#52525B"/><rect x="390" y="360" width="290" height="140" rx="20" fill="#C2410C"/></svg>`;
+
     return NextResponse.json({
       jobId,
       files: [
-        { name: "brickify-preview.svg", url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` },
+        { name: `brickify-${previewFile.name}`, url: previewUrlData.publicUrl },
         { name: "parts-list.csv", url: `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}` },
         { name: "build-guide.pdf", status: "준비중"},
         { name: "story-card.txt", url: `data:text/plain;charset=utf-8,${encodeURIComponent(txt)}` },

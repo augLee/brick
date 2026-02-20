@@ -57,6 +57,22 @@ export default function SuccessPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const successUrl = `${window.location.pathname}${window.location.search}`;
+
+    // Add one extra history entry so browser-back lands here and gets redirected back to success.
+    window.history.pushState({ locked: true }, "", successUrl);
+
+    const handlePopState = () => {
+      window.location.replace(successUrl);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const resolvedJobId = params.get("jobId");
 

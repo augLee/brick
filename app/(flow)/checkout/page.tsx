@@ -29,6 +29,7 @@ const copy = {
     item4: "스토리 카드 텍스트",
     secureText: "안전 결제(Stripe 연동 예정), 성공 후 즉시 다운로드",
     secureAdminText: "관리자 모드: 결제를 건너뛰고 즉시 다운로드로 이동",
+    betaFree: "베타테스트 중 무료",
   },
   en: {
     enterPageLog: "Entered checkout page",
@@ -51,6 +52,7 @@ const copy = {
     item4: "Story card text",
     secureText: "Secure payment (Stripe integration planned), instant download after success",
     secureAdminText: "Admin mode: skip payment and go straight to download",
+    betaFree: "Free during beta test",
   },
 } satisfies Record<SiteLanguage, Record<string, string>>;
 
@@ -125,7 +127,12 @@ export default function CheckoutPage() {
 
           <div className="mt-8 rounded-2xl bg-zinc-50 p-5">
             <p className="text-sm font-bold text-zinc-700">Brickify Digital Package</p>
-            <p className="mt-2 text-3xl font-black text-[#C2410C]">₩4,900</p>
+            <div className="mt-2 flex items-center gap-2">
+              <p className="text-3xl font-black text-[#C2410C]">₩4,900</p>
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-700">
+                {t.betaFree}
+              </span>
+            </div>
             <p className="mt-2 text-xs font-medium text-zinc-500">{t.oncePayment}</p>
           </div>
 

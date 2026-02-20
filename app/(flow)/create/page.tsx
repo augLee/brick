@@ -17,6 +17,7 @@ type RenderResult = {
   storyText: string;
 
   palette8?: string[];
+  mask64?: number[][];
   dominant_color?: string;
 
   debug?: {
@@ -63,6 +64,8 @@ const copy = {
     adminUploadSuccess: "이미지 업로드 성공",
     adminRenderSuccess: "렌더 생성 성공",
     adminFlowFail: "생성 플로우 실패",
+    maskTitle: "마스크 품질 확인",
+    maskDesc: "흰색(1)=BOM 포함, 검정(0)=배경 제외",
   },
   en: {
     fileSizeError: "File size must be 10MB or less.",
@@ -95,6 +98,8 @@ const copy = {
     adminUploadSuccess: "Image upload success",
     adminRenderSuccess: "Render generation success",
     adminFlowFail: "Generation flow failed",
+    maskTitle: "Mask Quality Check",
+    maskDesc: "White (1)=included in BOM, Black (0)=excluded as background",
   },
 } satisfies Record<SiteLanguage, Record<string, string>>;
 
@@ -228,6 +233,26 @@ export default function CreatePage() {
   
   const hasBom = useMemo(() => (bomMeta?.uniqueItems ?? safeBom.length) > 0, [bomMeta?.uniqueItems, safeBom.length]);
   const moreCount = useMemo(() => Math.max(0, sortedBom.length - TOP_N), [sortedBom.length]);
+  const maskPreviewUrl = useMemo(() => {
+    const mask = result?.mask64;
+    const valid =
+      Array.isArray(mask) &&
+      mask.length === 64 &&
+      mask.every((row) => Array.isArray(row) && row.length === 64);
+    if (!valid || !mask) return null;
+
+    const pixels: string[] = [];
+    for (let y = 0; y < 64; y++) {
+      for (let x = 0; x < 64; x++) {
+        if (mask[y][x] === 1) {
+          pixels.push(`<rect x="${x}" y="${y}" width="1" height="1" fill="#FFFFFF"/>`);
+        }
+      }
+    }
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="#000000"/>${pixels.join("")}</svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  }, [result?.mask64]);
 
   useEffect(() => {
       let cancelled = false;
@@ -244,8 +269,8 @@ export default function CreatePage() {
           setIsBomLoading(true);
           setBomError(null);
     
-          // ✅ 64x64로 빠르게
-          const computed = await computeBomFromPreview(result.previewImageUrl, result.palette8, 64, 64);
+          // ✅ 48x48 + mask 영역만 BOM 계산
+          const computed = await computeBomFromPreview(result.previewImageUrl, result.palette8, 48, 48, result.mask64);
           if (cancelled) return;
 
           // ✅ computeBomFromPreview는 { bom, totalPieces, totalStuds, uniqueItems } 리턴
@@ -380,6 +405,7 @@ export default function CreatePage() {
         partsSummary: renderData.partsSummary || t.partsFallback,
         storyText: renderData.storyText || t.storyFallback,
         palette8: (renderData as any).palette8,
+        mask64: (renderData as any).mask64,
         dominant_color: (renderData as any).dominant_color,
         debug: renderData.debug,
       });
@@ -486,6 +512,21 @@ export default function CreatePage() {
                 <div className="flex h-full items-center justify-center p-10 text-center text-sm font-semibold text-zinc-400">{t.noResult}</div>
               )}
             </div>
+            {result && maskPreviewUrl && (
+              <div className="rounded-[1.5rem] border border-zinc-200 bg-white p-4">
+                <div className="mb-3">
+                  <p className="text-sm font-black text-zinc-900">{t.maskTitle}</p>
+                  <p className="text-xs font-medium text-zinc-500">{t.maskDesc}</p>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-zinc-200 bg-black">
+                  <img
+                    src={maskPreviewUrl}
+                    alt={t.maskTitle}
+                    className="block h-full w-full object-contain [image-rendering:pixelated]"
+                  />
+                </div>
+              </div>
+            )}
 
             {result && (
               <div className="space-y-4 rounded-[1.5rem] border border-orange-100 bg-orange-50 p-6">

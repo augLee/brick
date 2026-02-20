@@ -1,5 +1,6 @@
 // lib/bom-client.ts
 export type BomItem = { part: string; color: string; count: number };
+export type Mask64 = number[][];
 
 export type BomResult = {
   bom: BomItem[];
@@ -61,7 +62,8 @@ export async function computeBomFromPreview(
   previewImageUrl: string,
   palette8: string[],
   gridW = 64,
-  gridH = 64
+  gridH = 64,
+  mask64?: Mask64
 ): Promise<BomResult> {
   const palette = palette8.map(normHex).filter(Boolean) as string[];
   if (palette.length !== 8) throw new Error("palette8 must be 8 valid #RRGGBB");
@@ -79,9 +81,25 @@ export async function computeBomFromPreview(
   const { data } = ctx.getImageData(0, 0, gridW, gridH);
 
   const grid: string[][] = Array.from({ length: gridH }, () => Array(gridW).fill(palette[0]));
+  const active: boolean[][] = Array.from({ length: gridH }, () => Array(gridW).fill(true));
+
+  const hasValidMask =
+    Array.isArray(mask64) &&
+    mask64.length === 64 &&
+    mask64.every((row) => Array.isArray(row) && row.length === 64);
+
+  const maskValueAt = (x: number, y: number) => {
+    if (!hasValidMask || !mask64) return 1;
+    const mx = Math.min(63, Math.floor((x * 64) / gridW));
+    const my = Math.min(63, Math.floor((y * 64) / gridH));
+    return mask64[my][mx] === 1 ? 1 : 0;
+  };
+
   for (let y = 0, idx = 0; y < gridH; y++) {
     for (let x = 0; x < gridW; x++) {
       const r = data[idx++], g = data[idx++], b = data[idx++], a = data[idx++];
+      const inMask = maskValueAt(x, y) === 1;
+      active[y][x] = inMask;
       grid[y][x] = a < 10 ? palette[0] : nearestPaletteColor(r, g, b, palette);
     }
   }
@@ -94,6 +112,7 @@ export async function computeBomFromPreview(
     for (let dy = 0; dy < h; dy++) for (let dx = 0; dx < w; dx++) {
       if (x + dx >= gridW || y + dy >= gridH) return false;
       if (used[y + dy][x + dx]) return false;
+      if (!active[y + dy][x + dx]) return false;
       if (grid[y + dy][x + dx] !== c) return false;
     }
     return true;
@@ -106,6 +125,10 @@ export async function computeBomFromPreview(
   for (let y = 0; y < gridH; y++) {
     for (let x = 0; x < gridW; x++) {
       if (used[y][x]) continue;
+      if (!active[y][x]) {
+        used[y][x] = true;
+        continue;
+      }
 
       let placed = false;
       for (const b of BRICKS) {
