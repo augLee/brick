@@ -5,8 +5,11 @@ import { CheckCircle2, Download, Loader2 } from "lucide-react";
 import { getAdminLogs, pushAdminLog, type AdminLogEntry } from "@/lib/admin-logs";
 import { isAdminModeEnabled } from "@/lib/admin-mode";
 import { useLanguage, type SiteLanguage } from "@/components/LanguageProvider";
+import { computeBomFromPreview } from "@/lib/bom-client";
 
 type DownloadPayload = {
+  jobId?: string;
+  meta?: { previewImageUrl: string; palette8: string[]; mask64: number[][] };
   files: Array<{ name: string; url?: string; status?: string; capacity?: string }>;
   note?: string;
   error?: string;
@@ -55,6 +58,8 @@ export default function SuccessPage() {
   const [logs, setLogs] = useState<AdminLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [bomSaving, setBomSaving] = useState(false);
+  const [bomSavedOnce, setBomSavedOnce] = useState(false);
 
   useEffect(() => {
     const successUrl = `${window.location.pathname}${window.location.search}`;
@@ -90,11 +95,43 @@ export default function SuccessPage() {
     const run = async () => {
       try {
         const res = await fetch(`/api/download?jobId=${encodeURIComponent(resolvedJobId)}`);
-        const payload = (await res.json()) as DownloadPayload;
-        if (!res.ok) {
-          throw new Error(payload.error || t.downloadLoadError);
+        let payload = (await res.json()) as DownloadPayload;
+        if (!res.ok) throw new Error(payload.error || t.downloadLoadError);
+
+        // ✅ parts-list.csv 없으면: 브라우저에서 BOM 계산 → 서버에 저장 → download 재조회
+        const hasCsvUrl = payload.files?.some((f) => f.name === "parts-list.csv" && !!f.url);
+
+        if (!hasCsvUrl && payload.meta && !bomSavedOnce && !bomSaving) {
+          setBomSaving(true);
+
+          const result = await computeBomFromPreview(
+            payload.meta.previewImageUrl,
+            payload.meta.palette8,
+            64,
+            64,
+            payload.meta.mask64
+          );
+
+          const saveRes = await fetch("/api/save-bom", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobId: resolvedJobId, result }),
+          });
+
+          const saved = await saveRes.json().catch(() => ({}));
+          if (!saveRes.ok) throw new Error(saved.error || "BOM 저장 실패");
+
+          setBomSavedOnce(true);
+          setBomSaving(false);
+
+          // ✅ 재조회해서 CSV publicUrl 받기
+          const res2 = await fetch(`/api/download?jobId=${encodeURIComponent(resolvedJobId)}`);
+          payload = (await res2.json()) as DownloadPayload;
+          if (!res2.ok) throw new Error(payload.error || t.downloadLoadError);
         }
+
         setData(payload);
+
         if (isAdminModeEnabled) {
           pushAdminLog("download", t.downloadSuccessLog, payload);
           setLogs(getAdminLogs());
@@ -109,6 +146,7 @@ export default function SuccessPage() {
         setError(err instanceof Error ? err.message : t.unknownError);
       } finally {
         setLoading(false);
+        setBomSaving(false);
       }
     };
 
@@ -129,6 +167,12 @@ export default function SuccessPage() {
             <div className="mt-8 inline-flex items-center gap-2 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-bold text-zinc-600">
               <Loader2 size={16} className="animate-spin" />
               {t.preparing}
+            </div>
+          )}
+          {bomSaving && (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-bold text-zinc-600">
+              <Loader2 size={16} className="animate-spin" />
+              부품리스트 생성 중...
             </div>
           )}
 

@@ -667,6 +667,55 @@ async function saveRenderIndex(inputHash: string, payload: StoredRenderIndex) {
   }
 }
 
+type StoredJobMeta = {
+  jobId: string;
+  inputImageUrl: string;
+  createdAt: string;
+  subject_type: VisionAnalysis["subject_type"];
+  confidence: number;
+  key_features: string[];
+  camera_hint: string;
+  negative_prompt: string;
+  dominant_color?: string;
+  palette8: string[];
+  mask64: number[][];
+  previewImageUrl: string; // stored public url
+};
+
+async function saveJobMetaToSupabase(jobId: string, meta: StoredJobMeta) {
+  const supabaseAdmin = getSupabaseAdminClient();
+  if (!supabaseAdmin) throw new Error("SUPABASE 환경변수를 확인해주세요.");
+
+  const path = `renders/${jobId}/meta.json`;
+
+  const { error } = await supabaseAdmin.storage
+    .from(publicBucket)
+    .upload(path, new TextEncoder().encode(JSON.stringify(meta)), {
+      contentType: "application/json",
+      upsert: true,
+    });
+
+  if (error) throw new Error(error.message || "job meta 저장 실패");
+}
+
+// (선택) bom.json을 미리 만들어두면 download route가 단순해짐
+// 지금은 실제 BOM 계산이 없으니 빈 배열로 저장(나중에 교체)
+async function saveEmptyBomToSupabase(jobId: string) {
+  const supabaseAdmin = getSupabaseAdminClient();
+  if (!supabaseAdmin) throw new Error("SUPABASE 환경변수를 확인해주세요.");
+
+  const path = `renders/${jobId}/bom.json`;
+
+  const { error } = await supabaseAdmin.storage
+    .from(publicBucket)
+    .upload(path, new TextEncoder().encode("[]"), {
+      contentType: "application/json",
+      upsert: true,
+    });
+
+  if (error) throw new Error(error.message || "bom.json 저장 실패");
+}
+
 // --- 메인 API 핸들러 ---
 export async function POST(req: Request) {
   let lockHash: string | null = null;
@@ -889,6 +938,23 @@ export async function POST(req: Request) {
     logStep(traceId, "storage:upload_preview:start", { jobId });
     const storedPreviewImageUrl = await uploadRenderImageToSupabase(jobId, previewImageUrl);
     logStep(traceId, "storage:upload_preview:done");
+    logStep(traceId, "storage:save_meta:start", { jobId });
+    await saveJobMetaToSupabase(jobId, {
+      jobId,
+      inputImageUrl: normalizedInputImageUrl,
+      createdAt: new Date().toISOString(),
+      subject_type: analysis.subject_type,
+      confidence: analysis.confidence,
+      key_features: analysis.key_features,
+      camera_hint: analysis.camera_hint,
+      negative_prompt: analysis.negative_prompt,
+      dominant_color: analysis.dominant_color,
+      palette8: palette,
+      mask64: clampMask64(analysis.mask64 ?? createCenterMask64()),
+      previewImageUrl: storedPreviewImageUrl,
+    });
+    await saveEmptyBomToSupabase(jobId); // ✅ (선택) 일단 자리잡기
+    logStep(traceId, "storage:save_meta:done", { jobId });
 
     const responseBody: GenerateRenderResponseBody = {
       jobId,
