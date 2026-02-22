@@ -465,12 +465,7 @@ async function analyzeWithOpenAI(inputImageUrl: string): Promise<VisionAnalysis>
 
   const model = process.env.OPENAI_VISION_MODEL?.trim() || "gpt-4o-mini";
   const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
-  const project = process.env.OPENAI_PROJECT_ID?.trim();
-
-  // 민감정보(키 전체) 로그 금지: 앞부분만
-  console.log("[OPENAI] key head:", apiKey.slice(0, 8));
-  console.log("[OPENAI] project:", project);
-  console.log("[OPENAI] vision model:", model);
+  const project = process.env.OPENAI_PROJECT_ID?.trim();  
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -1005,7 +1000,8 @@ async function generateImageWithOpenAI2(inputImageUrl: string, prompt: string): 
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
-  form.append("size", "1024x1024");
+  // generateImageWithOpenAI2 내부
+  form.append("size", "512x512"); // 기존 1024x1024
   form.append("image", imgBlob, "input.png");
 
   const headers: Record<string, string> = {
@@ -1013,11 +1009,13 @@ async function generateImageWithOpenAI2(inputImageUrl: string, prompt: string): 
   };
   if (project && project.startsWith("proj_")) headers["OpenAI-Project"] = project;
 
-  const res = await fetchWithRetryAndTimeout(`${baseUrl}/v1/images/edits`, {
+  const res = await fetchWithRetryAndTimeout(
+    `${baseUrl}/v1/images/edits`, 
+    {
     method: "POST",
     headers,
     body: form,
-  }, OPENAI_IMAGE_TIMEOUT_MS);
+  }, OPENAI_IMAGE_TIMEOUT_MS);  
 
   if (!res.ok) {
     const t = await res.text().catch(() => "");
