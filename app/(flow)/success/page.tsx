@@ -151,7 +151,7 @@ export default function SuccessPage() {
     };
 
     void run();
-  }, [t.downloadFailLog, t.downloadLoadError, t.downloadSuccessLog, t.enterPageLog, t.missingJobId, t.unknownError]);
+  }, [t.downloadFailLog, t.downloadLoadError, t.downloadSuccessLog, t.enterPageLog, t.missingJobId, t.unknownError, bomSavedOnce, bomSaving]);
 
   return (
     <main className="text-zinc-900">

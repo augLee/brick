@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Upload, Sparkles, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
+import { Upload, Loader2, ArrowRight, CheckCircle2, Info, ImageUp } from "lucide-react";
 import { clearAdminLogs, pushAdminLog } from "@/lib/admin-logs";
 import { isAdminModeEnabled } from "@/lib/admin-mode";
 import { useLanguage, type SiteLanguage } from "@/components/LanguageProvider";
@@ -287,7 +287,7 @@ export default function CreatePage() {
       return () => {
         cancelled = true;
       };
-    }, [result?.previewImageUrl, result?.palette8, language]);
+    }, [result?.previewImageUrl, result?.palette8, language, result?.mask64]);
 
   const validateImageFile = (nextFile: File) => {
     if (nextFile.size > MAX_FILE_SIZE) {

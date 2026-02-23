@@ -26,15 +26,6 @@ type VisionAnalysis = {
   mask64?: number[][];       // 64x64, each cell 0|1
 };
 
-type GeminiPart = {
-  text?: string;
-  inlineData?: { data?: string; mimeType?: string };
-};
-
-type GeminiResponse = {
-  candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
-};
-
 type ImagePayload = { mimeType: string; data: string };
 
 type VisionPrompt = { system: string; user: string };
@@ -104,7 +95,6 @@ const SUPABASE_MIME_TO_EXT: Record<string, string> = {
 };
 
 const OPENAI_VISION_TIMEOUT_MS = Number(process.env.OPENAI_VISION_TIMEOUT_MS || 60000);
-const GEMINI_IMAGE_TIMEOUT_MS = Number(process.env.GEMINI_IMAGE_TIMEOUT_MS || 45000);
 const OPENAI_IMAGE_TIMEOUT_MS = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 70000);
 const OPENAI_VISION_MAX_TOKENS = Number(process.env.OPENAI_VISION_MAX_TOKENS || 900);
 const FETCH_RETRY_COUNT = Number(process.env.FETCH_RETRY_COUNT || 2);
@@ -420,41 +410,6 @@ async function fetchInputImagePayload(inputImageUrl: string): Promise<ImagePaylo
   return { mimeType, data: base64Data };
 }
 
-// async function generateImageWithOpenAI(prompt: string): Promise<string> {
-//   const apiKey = process.env.OPENAI_API_KEY?.trim();
-//   if (!apiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
-
-//   const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
-//   const baseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
-//   const project = process.env.OPENAI_PROJECT_ID?.trim();
-
-//   const headers: Record<string, string> = {
-//     "Content-Type": "application/json",
-//     Authorization: `Bearer ${apiKey}`,
-//   };
-//   // 프로젝트 헤더는 proj_... 일 때만
-//   if (project && project.startsWith("proj_")) headers["OpenAI-Project"] = project;
-
-//   const res = await fetchWithRetryAndTimeout(`${baseUrl}/v1/images/generations`, {
-//     method: "POST",
-//     headers,
-//     body: JSON.stringify({
-//       model,
-//       prompt,
-//       size: "1024x1024",
-//     }),
-//   }, OPENAI_IMAGE_TIMEOUT_MS);
-
-//   if (!res.ok) {
-//     const t = await res.text().catch(() => "");
-//     throw new Error(`OpenAI 이미지 생성 실패: ${res.status} ${t}`);
-//   }
-
-//   const data = (await res.json()) as OpenAIImagesResponse;
-//   const b64 = data.data?.[0]?.b64_json;
-//   if (!b64) throw new Error("OpenAI 이미지 생성 결과가 비었습니다.");
-//   return `data:image/png;base64,${b64}`;
-// }
 async function cleanupJobArtifacts(jobId: string) {
   const supabaseAdmin = getSupabaseAdminClient();
   if (!supabaseAdmin) return;
@@ -811,20 +766,7 @@ export async function POST(req: Request) {
     Wheels/tires should use only #000000 or #7A7A7A (solid shapes, no gradients).
     `.trim();
 
-    // ✅ 최종 프롬프트 구성
-    // const finalPrompt = [
-    //   baseRenderPrompt(),
-    //   subjectAddon(analysis.subject_type),
-    //    // 3D 강제
-    //   "3D rules: full 3D object, freestanding, not attached to a vertical baseboard. No pixel mosaic. No wall art.",
-    //   "Show depth clearly: visible side surfaces, undercarriage shadow, gaps between parts.",
-    //   "Camera: 3/4 front view, slightly above, like a LEGO catalog product shot.",
-    //   "Lighting: softbox studio, crisp highlights on plastic, soft shadow on ground.",
-    //   `Key features: ${analysis.key_features.join(", ")}.`,
-    //   "Style: simplified blocky LEGO geometry.",
-    //   `Camera: ${analysis.camera_hint}.`,
-    //   `Negative prompt: ${analysis.negative_prompt}.`,
-    // ].join(" ");
+    // ✅ 최종 프롬프트 구성    
     const finalPrompt = [
       baseRenderPrompt(),
       subjectAddon(analysis.subject_type),
@@ -851,99 +793,19 @@ export async function POST(req: Request) {
 
     const imagePrompt = `${SAFE_PREFIX}\n\n${finalPrompt}`;
     logStep(traceId, "prompt:build:done", { paletteSize: palette.length });
-
-    let previewImageDataUrl: string | null = null; // ✅ 처음엔 null
+    
     let previewImageUrl = buildFallbackPreview(analysis.subject_type);
     logStep(traceId, "preview:init_fallback");
 
-    // ✅ Gemini는 이미지 생성만 (키 있을 때만)
-    // const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
-    // const enableGemini = process.env.ENABLE_GEMINI === "true";
-
-    // const geminiImageModel =
-    //   process.env.GEMINI_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image";
-
-    // 1) Gemini로 이미지 생성 시도
-    let geminiSucceeded = false;
-
-    // if (enableGemini && geminiApiKey) {
-    //   try {
-    //     logStep(traceId, "gemini:input_fetch:start");
-    //     const imagePayload = await fetchInputImagePayload(normalizedInputImageUrl);
-    //     logStep(traceId, "gemini:input_fetch:done", { mimeType: imagePayload.mimeType });
-
-    //     logStep(traceId, "gemini:generate:start", { model: geminiImageModel });
-    //     const geminiRes = await fetchWithRetryAndTimeout(
-    //       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    //         geminiImageModel
-    //       )}:generateContent?key=${geminiApiKey}`,
-    //       {
-    //         method: "POST",
-    //         headers: { "Content-Type": "application/json" },
-    //         body: JSON.stringify({
-    //           contents: [
-    //             {
-    //               role: "user",
-    //               parts: [
-    //                 { text: imagePrompt }, // ✅ safe prompt 사용
-    //                 {
-    //                   inlineData: {
-    //                     mimeType: imagePayload.mimeType,
-    //                     data: imagePayload.data,
-    //                   },
-    //                 },
-    //               ],
-    //             },
-    //           ],
-    //           generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-    //         }),
-    //       },
-    //       GEMINI_IMAGE_TIMEOUT_MS
-    //     );
-
-    //     if (geminiRes.ok) {
-    //       logStep(traceId, "gemini:generate:response_ok");
-    //       const geminiData = (await geminiRes.json()) as GeminiResponse;
-    //       const b64Image =
-    //         geminiData.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)
-    //           ?.inlineData?.data;
-
-    //       if (b64Image) {
-    //         previewImageUrl = `data:image/png;base64,${b64Image}`;
-    //         geminiSucceeded = true;
-    //         logStep(traceId, "gemini:generate:done");
-    //       }
-    //     } else {
-    //       const t = await geminiRes.text().catch(() => "");
-    //       console.warn(
-    //         "Gemini image generation failed:",
-    //         geminiRes.status,
-    //         t,
-    //         "model:",
-    //         geminiImageModel
-    //       );
-    //       logStep(traceId, "gemini:generate:failed_status", { status: geminiRes.status });
-    //     }
-    //   } catch (err: unknown) {
-    //     console.warn("Gemini image generation error:", err, "model:", geminiImageModel);
-    //     logStep(traceId, "gemini:generate:error");
-    //   }
-    // } else {
-    //   logStep(traceId, "gemini:skip", { enableGemini, hasApiKey: Boolean(geminiApiKey) });
-    // }
-
-    // 2) Gemini 실패 시 OpenAI 이미지 생성 fallback
-    if (!geminiSucceeded) {
-      try {
-        logStep(traceId, "openai:image_fallback:start");
-        //previewImageUrl = await generateImageWithOpenAI(imagePrompt); // ✅ safe prompt 사용
-        previewImageUrl = await generateImageWithOpenAI2(normalizedInputImageUrl, imagePrompt); // ✅ safe prompt 사용
-        logStep(traceId, "openai:image_fallback:done");
-      } catch (err: unknown) {
-        console.warn("OpenAI image fallback failed:", err);
-        logStep(traceId, "openai:image_fallback:error");
-      }
-    }
+    try {
+      logStep(traceId, "openai:image_fallback:start");
+      
+      previewImageUrl = await generateImageWithOpenAI(normalizedInputImageUrl, imagePrompt); // ✅ safe prompt 사용
+      logStep(traceId, "openai:image_fallback:done");
+    } catch (err: unknown) {
+      console.warn("OpenAI image fallback failed:", err);
+      logStep(traceId, "openai:image_fallback:error");
+    }   
 
     const jobId = crypto.randomUUID();
 
@@ -1007,7 +869,7 @@ export async function POST(req: Request) {
   }
 }
 
-async function generateImageWithOpenAI2(inputImageUrl: string, prompt: string): Promise<string> {
+async function generateImageWithOpenAI(inputImageUrl: string, prompt: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
 
@@ -1033,55 +895,8 @@ async function generateImageWithOpenAI2(inputImageUrl: string, prompt: string): 
     `${baseUrl}/v1/images/edits`,
     { method: "POST", headers, body: JSON.stringify(body) },
     OPENAI_IMAGE_TIMEOUT_MS
-  );
+  );  
 
-  // 1) 입력 이미지 fetch → Blob
-  // const imgRes = await fetchWithRetryAndTimeout(inputImageUrl, { method: "GET" }, OPENAI_IMAGE_TIMEOUT_MS);
-  // if (!imgRes.ok) throw new Error(`입력 이미지 fetch 실패: ${imgRes.status}`);
-
-  // const imgBlob = await imgRes.blob();
-  // console.error("[openai:edits] input", {
-  //   inputImageUrl,
-  //   fetchedContentType: imgRes.headers.get("content-type"),
-  //   blobType: imgBlob.type,
-  //   blobSize: imgBlob.size,
-  // });  
-
-  // // 2) multipart/form-data 구성 (Edge OK)
-  // const form = new FormData();
-  // form.append("model", model);
-  // form.append("prompt", prompt);
-  
-  // form.append("size", "1024x1024"); // 기존 1024x1024
-  // // 수정 2: base64 포맷으로 받기 위해 명시적 추가
-  // form.append("response_format", "b64_json");
-  // form.append("image[]", imgBlob, "input.png");
-
-  // const headers: Record<string, string> = {
-  //   Authorization: `Bearer ${apiKey}`,
-  // };
-  // if (project && project.startsWith("proj_")) headers["OpenAI-Project"] = project;
-
-  // const res = await fetchWithRetryAndTimeout(
-  //   `${baseUrl}/v1/images/edits`, 
-  //   {
-  //   method: "POST",
-  //   headers,
-  //   body: form,
-  // }, OPENAI_IMAGE_TIMEOUT_MS);  
-
-  console.error("[openai:http]", {
-    url: `${baseUrl}/v1/images/edits`,
-    status: res.status,
-    server: res.headers.get("server"),
-    via: res.headers.get("via"),
-    cfRay: res.headers.get("cf-ray"),
-    xRequestId: res.headers.get("x-request-id"),
-    openaiProcessingMs: res.headers.get("openai-processing-ms"),
-    contentType: res.headers.get("content-type"),
-  });
-  console.error("[openai] baseUrl", baseUrl);
-  
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`OpenAI 이미지 편집 실패: ${res.status} ${t}`);
